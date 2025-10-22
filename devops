@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+REPO_ROOT="{{REPO_ROOT}}"
+SCRIPTS_DIR="$REPO_ROOT/.devops/scripts"
+
+usage() {
+  cat <<'USAGE'
+Usage: ./devops <command> [arguments]
+
+Commands:
+  checkout <branch>     Checkout via .devops/scripts/checkout-branch.sh
+  push "message"        Run push-dev.sh with the given commit message
+  build [--clean]       Run build-local.sh
+  release [options]     Run release.sh
+  update [options]      Sync DevOps templates (update-devops.sh)
+  rollback              Launch rollback.sh (interactive)
+
+Pass additional arguments after the command.
+USAGE
+}
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 1
+fi
+
+cmd="$1"
+shift || true
+
+case "$cmd" in
+  checkout)
+    "$SCRIPTS_DIR/checkout-branch.sh" "$@"
+    ;;
+  push)
+    if [[ $# -lt 1 ]]; then
+      echo "Error: push requires a commit message." >&2
+      exit 1
+    fi
+    "$SCRIPTS_DIR/push-dev.sh" "$@"
+    ;;
+  build)
+    "$SCRIPTS_DIR/build-local.sh" "$@"
+    ;;
+  release)
+    "$SCRIPTS_DIR/release.sh" "$@"
+    ;;
+  update)
+    "$SCRIPTS_DIR/update-devops.sh" "$@"
+    ;;
+  rollback)
+    "$REPO_ROOT/.devops/rollback.sh" "$@"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage
+    exit 1
+    ;;
+ esac

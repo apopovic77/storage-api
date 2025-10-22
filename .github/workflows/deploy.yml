@@ -1,0 +1,79 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build application
+        run: echo 'No build needed for FastAPI'
+        env:
+          NODE_ENV: production
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+
+            REPO_PATH="/Volumes/DatenAP/Code/storage-api"
+            DEPLOY_PATH="/var/www/api-storage.arkturian.com"
+            BACKUP_DIR="/var/backups"
+            BACKUP_PREFIX="storage-api"
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            BACKUP_PATH="$BACKUP_DIR/${BACKUP_PREFIX}-${TIMESTAMP}"
+
+            cd "$REPO_PATH"
+
+            git fetch origin main
+            git reset --hard origin/main
+
+            pip install -r requirements.txt
+
+            echo 'No build needed for FastAPI'
+
+            if [ -d "$DEPLOY_PATH" ]; then
+              echo "Creating backup..."
+              mkdir -p "$BACKUP_DIR"
+              cp -r "$DEPLOY_PATH" "$BACKUP_PATH"
+            fi
+
+            echo "Deploying new build..."
+            mkdir -p "$DEPLOY_PATH"
+            rsync -av --delete "$REPO_PATH/dist/" "$DEPLOY_PATH/"
+
+            chown -R www-data:www-data "$DEPLOY_PATH"
+            chmod -R 755 "$DEPLOY_PATH"
+
+            echo "Deployment completed successfully!"
+            echo "Backup saved to: $BACKUP_PATH"
+
+      - name: Notify on success
+        if: success()
+        run: echo "✅ Deployment successful for commit ${{ github.sha }}"
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "❌ Deployment failed for commit ${{ github.sha }}"
