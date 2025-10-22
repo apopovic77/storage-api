@@ -17,8 +17,16 @@ import piexif
 
 from config import settings
 from database import get_db
-from tts_models import SpeechRequest
-import tts_service
+
+# TTS functionality is optional
+try:
+    from tts_models import SpeechRequest
+    import tts_service
+    TTS_AVAILABLE = True
+except ImportError:
+    TTS_AVAILABLE = False
+    SpeechRequest = None
+    tts_service = None
 
 def _get_gps_from_exif(exif_data: dict) -> Optional[Tuple[float, float]]:
     """Extracts and converts GPS data from EXIF dict to decimal degrees."""
@@ -715,11 +723,15 @@ def bulk_delete_objects(db, name: Optional[str] = None, collection_like: Optiona
     return deleted_count
 
 
-async def _process_tts_request_from_storage(storage_obj, tts_request: SpeechRequest):
+async def _process_tts_request_from_storage(storage_obj, tts_request):
     """
     Internal function to process a TTS request from a storage file.
     This avoids calling the public API endpoint and prevents recursion.
     """
+    if not TTS_AVAILABLE:
+        print(f"--- TTS Hook SKIPPED: TTS functionality not available (tts_models/tts_service not found)")
+        return
+
     audio_bytes = None
     db_session = next(get_db())
     try:
@@ -1152,27 +1164,46 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                                                   storage_obj.original_filename.lower().endswith('.csv'))):
             # Text processing - check for TTS request first, then queue for general analysis
             if not skip_ai_safety:
-                try:
-                    # Read the content of the text file
-                    async with aiofiles.open(file_path, "r") as f:
-                        content = await f.read()
-                    
-                    # Try to parse as JSON and validate against our TTS model
-                    json_content = json.loads(content)
-                    tts_request = SpeechRequest(**json_content)
-                    
-                    # If validation is successful, it's a TTS request. Process it.
-                    print(f"--- TTS Hook DETECTED: Storage Object {storage_obj.id} is a valid TTS request.")
-                    await _process_tts_request_from_storage(storage_obj, tts_request)
-                    
-                    # Since we processed it as TTS, we can skip the generic text analysis for now.
-                    return
-                
-                except (json.JSONDecodeError, ValidationError):
-                    # This is not a valid TTS request, so proceed with standard text analysis.
-                    print(f"--- INFO: Storage Object {storage_obj.id} is not a TTS request, queuing for standard text analysis.")
-                    pass # Fall through to the generic text analysis queue below
-                
+                # Only try TTS processing if TTS modules are available
+                if TTS_AVAILABLE:
+                    try:
+                        # Read the content of the text file
+                        async with aiofiles.open(file_path, "r") as f:
+                            content = await f.read()
+
+                        # Try to parse as JSON and validate against our TTS model
+                        json_content = json.loads(content)
+                        tts_request = SpeechRequest(**json_content)
+
+                        # If validation is successful, it's a TTS request. Process it.
+                        print(f"--- TTS Hook DETECTED: Storage Object {storage_obj.id} is a valid TTS request.")
+                        await _process_tts_request_from_storage(storage_obj, tts_request)
+
+                        # Since we processed it as TTS, we can skip the generic text analysis for now.
+                        return
+
+                    except (json.JSONDecodeError, ValidationError):
+                        # This is not a valid TTS request, so proceed with standard text analysis.
+                        print(f"--- INFO: Storage Object {storage_obj.id} is not a TTS request, queuing for standard text analysis.")
+                        pass # Fall through to the generic text analysis queue below
+                else:
+                    # TTS not available, skip TTS processing
+                    try:
+                        # Read the content of the text file
+                        async with aiofiles.open(file_path, "r") as f:
+                            content = await f.read()
+
+                        # Try to parse as JSON to see if it looks like TTS (but we can't validate)
+                        try:
+                            json_content = json.loads(content)
+                            # Just log that we skipped TTS processing
+                            print(f"--- INFO: Storage Object {storage_obj.id} might be TTS request, but TTS modules unavailable. Queuing for standard text analysis.")
+                        except json.JSONDecodeError:
+                            pass # Not JSON, continue with text analysis
+                    except Exception:
+                        pass # Fall through to generic text analysis
+
+                # Generic text analysis (fallback or non-TTS text files)
                 with open(ai_queue_file, "a") as f:
                     f.write(f"{storage_obj.id}|text|{file_path}|{storage_obj.original_filename}\n")
                 print(f"--- SUCCESS: Text queued for AI analysis: {file_path}")
