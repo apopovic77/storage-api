@@ -14,19 +14,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Build application
         run: echo 'No build needed for FastAPI'
-        env:
-          NODE_ENV: production
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
@@ -38,37 +36,58 @@ jobs:
           script: |
             set -e
 
-            REPO_PATH="/Volumes/DatenAP/Code/storage-api"
+            REPO_URL="https://github.com/apopovic77/storage-api.git"
+            REPO_PATH="/opt/repos/storage-api"
             DEPLOY_PATH="/var/www/api-storage.arkturian.com"
             BACKUP_DIR="/var/backups"
             BACKUP_PREFIX="storage-api"
             TIMESTAMP=$(date +%Y%m%d-%H%M%S)
             BACKUP_PATH="$BACKUP_DIR/${BACKUP_PREFIX}-${TIMESTAMP}"
 
-            cd "$REPO_PATH"
+            # Clone or update repo
+            if [ ! -d "$REPO_PATH" ]; then
+              echo "Cloning repository..."
+              mkdir -p /opt/repos
+              git clone "$REPO_URL" "$REPO_PATH"
+            fi
 
+            cd "$REPO_PATH"
             git fetch origin main
             git reset --hard origin/main
 
-            pip install -r requirements.txt
-
-            echo 'No build needed for FastAPI'
-
+            # Create backup
             if [ -d "$DEPLOY_PATH" ]; then
               echo "Creating backup..."
               mkdir -p "$BACKUP_DIR"
               cp -r "$DEPLOY_PATH" "$BACKUP_PATH"
+              echo "Backup saved to: $BACKUP_PATH"
             fi
 
-            echo "Deploying new build..."
+            # Deploy
+            echo "Deploying FastAPI application..."
             mkdir -p "$DEPLOY_PATH"
-            rsync -av --delete "$REPO_PATH/dist/" "$DEPLOY_PATH/"
+            rsync -av --delete \
+              --exclude='.git' \
+              --exclude='__pycache__' \
+              --exclude='*.pyc' \
+              --exclude='.env' \
+              --exclude='venv' \
+              "$REPO_PATH/" "$DEPLOY_PATH/"
 
+            # Install dependencies in deployment directory
+            cd "$DEPLOY_PATH"
+            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+
+            # Set permissions
             chown -R www-data:www-data "$DEPLOY_PATH"
             chmod -R 755 "$DEPLOY_PATH"
 
-            echo "Deployment completed successfully!"
-            echo "Backup saved to: $BACKUP_PATH"
+            # Restart service
+            echo "Restarting storage-api service..."
+            systemctl restart storage-api
+
+            echo "✅ Deployment completed successfully!"
+            systemctl status storage-api --no-pager -l
 
       - name: Notify on success
         if: success()
