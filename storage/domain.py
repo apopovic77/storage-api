@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from artrack.models import StorageObject
+from models import StorageObject
 from storage.service import generic_storage
 
 
