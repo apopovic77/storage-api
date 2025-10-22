@@ -12,11 +12,11 @@ import base64
 import subprocess
 from pathlib import Path
 
-from artrack.database import get_db
-from artrack.auth import get_current_user, get_current_user_optional, generate_api_key
-from artrack.models import StorageObject, StorageObjectResponse, StorageListResponse, User
+from database import get_db
+from auth import get_current_user, get_current_user_optional, generate_api_key
+from models import StorageObject, StorageObjectResponse, StorageListResponse, User
 from ai_analysis import analyze_content
-from artrack.config import settings
+from config import settings
 from pydantic import BaseModel
 import httpx
 from urllib.parse import urlparse, urlunparse
@@ -26,8 +26,8 @@ from fastapi.security.api_key import APIKeyHeader as _APIKeyHeader
 from storage.domain import save_file_and_record, update_file_and_record
 from storage.service import generic_storage, bulk_delete_objects, GenericStorageService
 from storage.external_proxy import fetch_external_file, external_cache
-import admin_routes
-from tenant_config import tenant_id_for_api_key, get_tenant_id, get_tenant_id_optional
+from admin import routes as admin_routes
+from tenancy.config import tenant_id_for_api_key, get_tenant_id, get_tenant_id_optional
 
 
 router = APIRouter()

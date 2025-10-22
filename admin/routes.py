@@ -4,9 +4,9 @@ from sqlalchemy import func
 from typing import Optional, List
 import shutil
 from pathlib import Path
-from artrack.database import get_db
-from artrack.auth import get_current_user
-from artrack.models import StorageObject, User
+from database import get_db
+from auth import get_current_user
+from models import StorageObject, User
 from pydantic import BaseModel
 from storage.service import generic_storage
 

@@ -4,8 +4,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from artrack.database import get_db
-from artrack.models import StorageObject
+from database import get_db
+from models import StorageObject
 
 
 async def backfill_for_user(db: Session, owner_user_id: Optional[int] = None, tenant_domain: Optional[str] = None, limit: Optional[int] = None):

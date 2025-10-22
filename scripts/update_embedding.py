@@ -12,10 +12,10 @@ import argparse
 import asyncio
 from pathlib import Path
 
-sys.path.insert(0, "/var/www/api.arkturian.com")
+sys.path.insert(0, "/var/www/storage-api")
 
-from artrack.database import SessionLocal
-from artrack.models import StorageObject
+from database import SessionLocal
+from models import StorageObject
 from knowledge_graph.embedding_service import embedding_service
 from knowledge_graph.vector_store import vector_store
 from knowledge_graph.models import EmbeddingVector

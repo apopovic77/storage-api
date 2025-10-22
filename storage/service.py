@@ -15,8 +15,8 @@ from typing import Optional, Tuple
 from PIL import Image
 import piexif
 
-from artrack.config import settings
-from artrack.database import get_db
+from config import settings
+from database import get_db
 from tts_models import SpeechRequest
 import tts_service
 
@@ -648,7 +648,7 @@ def bulk_delete_objects(db, name: Optional[str] = None, collection_like: Optiona
     Finds and deletes storage objects matching filter criteria, including their physical files
     and any other files that share a link_id with the found items.
     """
-    from artrack.models import StorageObject, User
+    from models import StorageObject, User
     import shutil
 
     # Step 1: Find initial objects based on filters
@@ -723,7 +723,7 @@ async def _process_tts_request_from_storage(storage_obj, tts_request: SpeechRequ
     audio_bytes = None
     db_session = next(get_db())
     try:
-        from artrack.storage_domain import save_file_and_record
+        from storage.domain import save_file_and_record
         print(f"--- TTS Hook: Processing TTS request ID {tts_request.id} from Storage Object {storage_obj.id}")
         
         # Re-use the logic from the main API endpoint
@@ -893,8 +893,8 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                 
                 # Update target storage object with extracted metadata and HLS URL
                 try:
-                    from artrack.database import get_db
-                    from artrack.models import StorageObject
+                    from database import get_db
+                    from models import StorageObject
                     db = next(get_db())
                     
                     # Check if this is for an original video (new architecture)
@@ -1016,14 +1016,14 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                                 # Mark in database that this is being processed by Mac
                                 # Store the Mac job_id in the metadata_json field for tracking
                                 from datetime import datetime, timezone
-                                from artrack.database import SessionLocal
-                                
+                                from database import SessionLocal
+
                                 # Create new DB session for this operation
                                 db_session = SessionLocal()
                                 try:
                                     # Get the object in this session by ID
                                     storage_obj_id = storage_obj.id
-                                    from artrack.models import StorageObject
+                                    from models import StorageObject
                                     storage_obj_refresh = db_session.get(StorageObject, storage_obj_id)
                                     
                                     if not storage_obj_refresh.metadata_json:
@@ -1073,14 +1073,14 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                                 # Mark in database that this is being processed by Mac
                                 # Store the Mac job_id in the metadata_json field for tracking
                                 from datetime import datetime, timezone
-                                from artrack.database import SessionLocal
-                                
+                                from database import SessionLocal
+
                                 # Create new DB session for this operation
                                 db_session = SessionLocal()
                                 try:
                                     # Get the object in this session by ID
                                     storage_obj_id = storage_obj.id
-                                    from artrack.models import StorageObject
+                                    from models import StorageObject
                                     storage_obj_refresh = db_session.get(StorageObject, storage_obj_id)
                                     
                                     if not storage_obj_refresh.metadata_json:

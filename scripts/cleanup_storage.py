@@ -10,8 +10,8 @@ from pathlib import Path
 # Add the project root to the Python path to allow importing project modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from artrack.models import Base, StorageObject
-from artrack.config import settings
+from models import Base, StorageObject
+from config import settings
 
 DATABASE_URL = settings.DATABASE_URL
 engine = create_engine(DATABASE_URL)

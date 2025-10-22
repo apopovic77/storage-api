@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from artrack.database import SessionLocal
-from artrack.models import StorageObject
+from database import SessionLocal
+from models import StorageObject
 import asyncio
 from storage.service import enqueue_ai_safety_and_transcoding
 
