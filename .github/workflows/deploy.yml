@@ -82,6 +82,29 @@ jobs:
             chown -R www-data:www-data "$DEPLOY_PATH"
             chmod -R 755 "$DEPLOY_PATH"
 
+            # Database Migration with Backup
+            DB_PATH="/var/lib/api-arkturian/storage.db"
+            DB_BACKUP="/var/backups/storage-db-${TIMESTAMP}.db"
+
+            if [ -f "$DB_PATH" ]; then
+              echo "📦 Backing up database..."
+              cp "$DB_PATH" "$DB_BACKUP"
+              echo "✅ Database backed up to: $DB_BACKUP"
+            fi
+
+            # Run Alembic migrations (if alembic directory exists)
+            if [ -d "alembic" ]; then
+              echo "🔄 Running database migrations..."
+              /root/.pyenv/versions/3.11.9/bin/alembic upgrade head || {
+                echo "❌ Migration failed! Restoring backup..."
+                cp "$DB_BACKUP" "$DB_PATH"
+                exit 1
+              }
+              echo "✅ Migrations completed successfully"
+            else
+              echo "⚠️  No alembic migrations found (skipping)"
+            fi
+
             # Restart service
             echo "Restarting storage-api service..."
             systemctl restart storage-api
