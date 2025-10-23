@@ -5,7 +5,7 @@ from typing import Dict
 
 from auth import get_current_user
 from models import User
-from tenant_config import list_tenant_keys, upsert_tenant_key, delete_tenant_key
+from tenancy.config import list_tenant_keys, upsert_tenant_key, delete_tenant_key
 
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
