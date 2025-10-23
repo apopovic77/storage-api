@@ -32,7 +32,7 @@ app.add_middleware(
 # Include routers
 app.include_router(storage_routes.router, prefix="/storage", tags=["Storage"])
 app.include_router(tenant_routes.router, prefix="/tenants", tags=["Tenancy"])
-app.include_router(admin_routes.admin_router, prefix="/admin", tags=["Admin"])
+app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 
 @app.get("/")
 def root():
