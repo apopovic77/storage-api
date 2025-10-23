@@ -18,8 +18,8 @@ openai==1.3.0                # Embeddings
 # Vector Database
 chromadb>=0.5.0
 
-# HTTP Client
-httpx>=0.25.1
+# HTTP Client (pin to <0.27 for chromadb compatibility)
+httpx>=0.25.1,<0.27
 
 # Utilities
 python-dateutil==2.8.2
