@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 import json
 
-from artrack.models import StorageObject, User
+from models import StorageObject, User
 from knowledge_graph.models import EmbeddingVector, KnowledgeGraphEntry
 from knowledge_graph.embedding_service import embedding_service
 from knowledge_graph.vector_store import vector_store

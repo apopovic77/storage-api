@@ -1399,10 +1399,10 @@ def get_asset_variant_references(
 
         # Construct original file URL with checksum for cache-busting
         try:
-            from artrack.config import settings as _settings
+            from config import settings as _settings
             base = _settings.BASE_URL.rstrip("/")
         except Exception:
-            base = "https://api.arkturian.com"
+            base = "https://api-storage.arkturian.com"
         file_url = f"{base}/uploads/storage/media/{obj.object_key}"
         if getattr(obj, "checksum", None):
             sep = "&" if "?" in file_url else "?"
@@ -1553,10 +1553,10 @@ def get_asset_variant_references_batch(
 
         # Construct original file URL with checksum
         try:
-            from artrack.config import settings as _settings
+            from config import settings as _settings
             base = _settings.BASE_URL.rstrip("/")
         except Exception:
-            base = "https://api.arkturian.com"
+            base = "https://api-storage.arkturian.com"
         file_url = f"{base}/uploads/storage/media/{obj.object_key}"
         if getattr(obj, "checksum", None):
             sep = "&" if "?" in file_url else "?"

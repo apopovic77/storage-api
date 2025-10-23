@@ -92,6 +92,23 @@ class StorageObject(Base):
     tenant_id = Column(String(50), default="arkturian", index=True)  # Tenant identifier for multi-tenancy
 
 
+class AsyncTask(Base):
+    __tablename__ = "async_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String, unique=True, index=True)
+    object_id = Column(Integer, ForeignKey("storage_objects.id"), index=True)
+    status = Column(String, default="queued")  # queued, processing, completed, failed
+    mode = Column(String, default="quality")  # fast, quality
+    current_phase = Column(String, nullable=True)  # safety_check, ai_analysis, building_knowledge_graph, etc.
+    progress = Column(Integer, default=0)  # 0-100
+    error = Column(Text, nullable=True)
+    result = Column(Text, nullable=True)  # JSON string
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
 # Pydantic Models for API
 class StorageObjectResponse(BaseModel):
     id: int

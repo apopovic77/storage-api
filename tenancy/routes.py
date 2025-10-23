@@ -3,8 +3,8 @@ from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from typing import Dict
 
-from artrack.auth import get_current_user
-from artrack.models import User
+from auth import get_current_user
+from models import User
 from tenant_config import list_tenant_keys, upsert_tenant_key, delete_tenant_key
 
 

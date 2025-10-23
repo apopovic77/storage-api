@@ -17,7 +17,7 @@ from enum import Enum
 from dataclasses import dataclass, asdict
 
 from sqlalchemy.orm import Session
-from artrack.models import StorageObject, AsyncTask
+from models import StorageObject, AsyncTask
 
 
 class TaskStatus(str, Enum):

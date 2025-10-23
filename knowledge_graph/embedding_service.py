@@ -7,7 +7,7 @@ Generates semantic vector embeddings using OpenAI's text-embedding-3-large model
 import os
 from typing import List
 from openai import AsyncOpenAI
-from artrack.models import StorageObject
+from models import StorageObject
 
 
 class EmbeddingService:
