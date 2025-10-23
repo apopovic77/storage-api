@@ -24,15 +24,19 @@ class VectorStore:
     ChromaDB-based vector store for semantic embeddings.
 
     Stores embeddings and enables fast similarity search.
+    Supports per-tenant collection isolation.
     """
 
-    def __init__(self, persist_directory: Optional[str] = None):
+    def __init__(self, persist_directory: Optional[str] = None, tenant_id: Optional[str] = None):
         """
-        Initialize ChromaDB client.
+        Initialize ChromaDB client with optional tenant isolation.
 
         Args:
             persist_directory: Directory to persist ChromaDB data.
                               Defaults to CHROMA_DB_PATH from settings.
+            tenant_id: Tenant identifier for multi-tenancy isolation.
+                      If provided, creates collection: tenant_{tenant_id}_knowledge
+                      If None, uses legacy "arkturian_knowledge" for backward compatibility.
         """
         if persist_directory is None:
             persist_directory = app_settings.CHROMA_DB_PATH
@@ -48,11 +52,20 @@ class VectorStore:
             )
         )
 
-        # Collection for O'Neal/general knowledge
-        self.collection_name = "arkturian_knowledge"
+        # Per-tenant collection naming for hard isolation
+        self.tenant_id = tenant_id
+        if tenant_id:
+            self.collection_name = f"tenant_{tenant_id}_knowledge"
+        else:
+            # Backward compatibility: default to legacy collection name
+            self.collection_name = "arkturian_knowledge"
+
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,
-            metadata={"description": "Semantic knowledge graph embeddings"}
+            metadata={
+                "description": f"Semantic knowledge graph embeddings for tenant: {tenant_id or 'default'}",
+                "tenant_id": tenant_id or "default"
+            }
         )
 
     def upsert_embedding(self, embedding: EmbeddingVector) -> None:
@@ -349,5 +362,18 @@ class VectorStore:
         )
 
 
-# Global vector store instance
+# Global vector store instance (legacy - for backward compatibility)
+# For multi-tenant usage, create VectorStore(tenant_id="...") instances
 vector_store = VectorStore()
+
+def get_vector_store(tenant_id: Optional[str] = None) -> VectorStore:
+    """
+    Factory function to get a tenant-specific vector store.
+
+    Args:
+        tenant_id: Tenant identifier. If None, returns legacy default store.
+
+    Returns:
+        VectorStore instance for the specified tenant
+    """
+    return VectorStore(tenant_id=tenant_id)

@@ -18,7 +18,7 @@ import json
 from models import StorageObject, User
 from knowledge_graph.models import EmbeddingVector, KnowledgeGraphEntry
 from knowledge_graph.embedding_service import embedding_service
-from knowledge_graph.vector_store import vector_store
+from knowledge_graph.vector_store import vector_store, get_vector_store, VectorStore
 from ai_analysis.uri_handler import select_best_uri, is_valid_url
 
 
@@ -32,7 +32,8 @@ class KnowledgeGraphPipeline:
 
     def __init__(self):
         self.embedding_service = embedding_service
-        self.vector_store = vector_store
+        self.vector_store = vector_store  # Legacy default store
+        # Note: Use get_vector_store(tenant_id) for tenant-specific operations
 
     async def process_storage_object(
         self,
@@ -42,6 +43,9 @@ class KnowledgeGraphPipeline:
         """
         Process a storage object and create/update its knowledge graph entry.
 
+        **TENANT ISOLATION**: Uses tenant-specific vector store collection based on
+        storage_obj.tenant_id for hard database-level isolation.
+
         **UPDATE STRATEGY**: If the object already has an embedding, it will be
         deleted before creating a new one. This ensures we don't have stale
         embeddings when content is re-uploaded or re-analyzed.
@@ -50,29 +54,36 @@ class KnowledgeGraphPipeline:
         embeddings (e.g., one per CSV row). Otherwise creates single embedding.
 
         Steps:
-        1. Delete existing embedding(s) (if any)
-        2. Check if AI returned embeddingsList (multi-embedding mode)
-        3. Generate embedding vector(s) from AI results
-        4. Store in ChromaDB with appropriate IDs
-        5. Return knowledge graph entry
+        1. Get tenant-specific vector store
+        2. Delete existing embedding(s) (if any)
+        3. Check if AI returned embeddingsList (multi-embedding mode)
+        4. Generate embedding vector(s) from AI results
+        5. Store in tenant's ChromaDB collection
+        6. Return knowledge graph entry
 
         Args:
-            storage_obj: StorageObject with AI analysis results
+            storage_obj: StorageObject with AI analysis results (includes tenant_id)
             db: Database session
 
         Returns:
             KnowledgeGraphEntry or None if processing failed
         """
-        print(f"📊 KG Pipeline: Processing object {storage_obj.id}")
+        tenant_id = storage_obj.tenant_id or "arkturian"
+        print(f"📊 KG Pipeline: Processing object {storage_obj.id} for tenant '{tenant_id}'")
+
+        # Get tenant-specific vector store for hard isolation
+        tenant_vector_store = get_vector_store(tenant_id=tenant_id)
+        print(f"📊 Using collection: {tenant_vector_store.collection_name}")
 
         with open("/tmp/kg_pipeline_debug.log", "a") as log:
             log.write(f"📊 KG Pipeline START for object {storage_obj.id}\n")
+            log.write(f"📊 Tenant: {tenant_id}, Collection: {tenant_vector_store.collection_name}\n")
             log.flush()
 
         try:
             # STEP 1: DELETE OLD EMBEDDINGS (Update Strategy)
             # This ensures we don't keep outdated embeddings when re-uploading files
-            await self._delete_existing_embeddings(storage_obj.id)
+            tenant_vector_store.delete_embedding(storage_obj.id)
 
             # STEP 2: Check for AI embeddingsList (multi-embedding mode)
             embeddings_list = None
@@ -134,7 +145,7 @@ class KnowledgeGraphPipeline:
 
                 print(f"🎯 KG Pipeline: Multi-embedding mode - creating {len(embeddings_list)} embeddings")
                 embeddings = await self._create_multiple_embeddings(
-                    storage_obj, embeddings_list, db
+                    storage_obj, embeddings_list, db, tenant_vector_store
                 )
 
                 with open("/tmp/kg_pipeline_debug.log", "a") as log:
@@ -199,9 +210,9 @@ class KnowledgeGraphPipeline:
                     metadata=metadata
                 )
 
-                # Store in ChromaDB
-                self.vector_store.upsert_embedding(embedding)
-                print(f"✅ KG Pipeline: Stored embedding for object {storage_obj.id}")
+                # Store in tenant-specific ChromaDB collection
+                tenant_vector_store.upsert_embedding(embedding)
+                print(f"✅ KG Pipeline: Stored embedding for object {storage_obj.id} in {tenant_vector_store.collection_name}")
 
                 # Create Knowledge Graph Entry
                 kg_entry = KnowledgeGraphEntry(
@@ -266,7 +277,8 @@ class KnowledgeGraphPipeline:
         self,
         storage_obj: StorageObject,
         embeddings_list: list,
-        db: Session
+        db: Session,
+        tenant_vector_store: VectorStore
     ) -> Optional[list]:
         """
         Create multiple embeddings from AI's embeddingsList.
@@ -330,9 +342,9 @@ class KnowledgeGraphPipeline:
                     metadata=sanitized_metadata
                 )
 
-                # Store with custom ID (obj_{object_id}_{idx})
+                # Store with custom ID (obj_{object_id}_{idx}) in tenant-specific collection
                 chroma_id = f"obj_{storage_obj.id}_{idx}"
-                self.vector_store.collection.upsert(
+                tenant_vector_store.collection.upsert(
                     ids=[chroma_id],
                     embeddings=[vector],
                     metadatas=[sanitized_metadata],
@@ -387,7 +399,8 @@ class KnowledgeGraphPipeline:
         self,
         object_id: int,
         limit: int = 10,
-        where: Optional[Dict[str, Any]] = None
+        where: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None
     ) -> list:
         """
         Find objects similar to the given storage object.
@@ -395,13 +408,17 @@ class KnowledgeGraphPipeline:
         Args:
             object_id: Storage object ID
             limit: Maximum number of results
+            where: Optional metadata filters
+            tenant_id: Tenant identifier for collection selection
 
         Returns:
             List of similar objects with similarity scores
         """
         try:
-            print(f"🔍 KG Pipeline: find_similar_objects called for object_id={object_id}, limit={limit}")
-            result = self.vector_store.find_similar(object_id, limit, where=where)
+            # Get tenant-specific vector store
+            tenant_vector_store = get_vector_store(tenant_id=tenant_id)
+            print(f"🔍 KG Pipeline: find_similar_objects for object_id={object_id}, tenant={tenant_id}, collection={tenant_vector_store.collection_name}")
+            result = tenant_vector_store.find_similar(object_id, limit, where=where)
             print(f"🔍 KG Pipeline: find_similar returned {len(result)} results")
             return result
         except Exception as e:

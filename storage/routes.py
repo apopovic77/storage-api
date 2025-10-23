@@ -130,8 +130,8 @@ async def find_similar_objects(
         except Exception:
             where = None
 
-        # Find similar objects using KG with where filter
-        similar_results = await kg_pipeline.find_similar_objects(object_id, limit, where=where)
+        # Find similar objects using KG with where filter (tenant-specific collection)
+        similar_results = await kg_pipeline.find_similar_objects(object_id, limit, where=where, tenant_id=tenant_id)
 
         if not similar_results:
             return SimilarityResponse(
@@ -275,8 +275,11 @@ async def kg_text_search(
     """
     try:
         from knowledge_graph.embedding_service import embedding_service
-        from knowledge_graph.vector_store import vector_store
+        from knowledge_graph.vector_store import get_vector_store
         from knowledge_graph.pipeline import kg_pipeline
+
+        # Get tenant-specific vector store
+        tenant_vector_store = get_vector_store(tenant_id=tenant_id)
 
         # Build metadata filter for vector store
         where: Optional[dict] = None
@@ -306,9 +309,9 @@ async def kg_text_search(
             # Chroma where doesn't support ilike contains directly; skip in vector query and post-filter by DB below
             pass
 
-        # Generate query embedding and search
+        # Generate query embedding and search in tenant-specific collection
         vector = await embedding_service.generate_embedding(query)
-        vs_results = vector_store.search_by_text(query_text=query, query_embedding=vector, limit=limit, filters=where)
+        vs_results = tenant_vector_store.search_by_text(query_text=query, query_embedding=vector, limit=limit, filters=where)
 
         if not vs_results:
             return KGSearchResponse(query=query, results=[], total_embeddings=kg_pipeline.get_stats()["total_embeddings"])  # type: ignore
@@ -2138,9 +2141,10 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
 
         for child in linked_children:
             try:
-                # Delete child's embedding
-                from knowledge_graph.vector_store import vector_store
-                vector_store.delete_embedding(child.id)
+                # Delete child's embedding from tenant-specific collection
+                from knowledge_graph.vector_store import get_vector_store
+                child_tenant_store = get_vector_store(tenant_id=child.tenant_id)
+                child_tenant_store.delete_embedding(child.id)
                 print(f"  🗑️  Deleted embedding for child object {child.id}")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not delete embedding for child {child.id}: {e}")
@@ -2159,10 +2163,11 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
         db.commit()
         print(f"✅ Cascade deleted {len(linked_children)} child objects")
 
-    # Delete embedding from Knowledge Graph
+    # Delete embedding from Knowledge Graph (tenant-specific collection)
     try:
-        from knowledge_graph.vector_store import vector_store
-        vector_store.delete_embedding(obj.id)
+        from knowledge_graph.vector_store import get_vector_store
+        obj_tenant_store = get_vector_store(tenant_id=obj.tenant_id)
+        obj_tenant_store.delete_embedding(obj.id)
         print(f"🗑️  Deleted embedding for storage object {obj.id}")
     except Exception as e:
         print(f"Warning: Could not delete embedding for object {obj.id}: {e}")
@@ -2681,45 +2686,48 @@ async def update_embedding_text(
     }
     """
     from knowledge_graph.embedding_service import embedding_service
-    from knowledge_graph.vector_store import vector_store
+    from knowledge_graph.vector_store import get_vector_store
     from knowledge_graph.models import EmbeddingVector
-    
+
     obj = db.query(StorageObject).filter(
         StorageObject.id == object_id,
         StorageObject.tenant_id == tenant_id
     ).first()
-    
+
     if not obj:
         raise HTTPException(status_code=404, detail="Object not found")
-    
+
     new_text = request.get("embedding_text", "").strip()
-    
+
     if not new_text:
         raise HTTPException(status_code=400, detail="embedding_text cannot be empty")
-    
+
     # Update embedding text in ai_context_metadata
     if obj.ai_context_metadata is None:
         obj.ai_context_metadata = {}
-    
+
     if "embedding_info" not in obj.ai_context_metadata:
         obj.ai_context_metadata["embedding_info"] = {}
-    
+
     old_text = obj.ai_context_metadata.get("embedding_info", {}).get("embeddingText", "")
     obj.ai_context_metadata["embedding_info"]["embeddingText"] = new_text
-    
+
     # Mark as modified for SQLAlchemy JSONB tracking
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(obj, "ai_context_metadata")
-    
+
     db.commit()
-    
+
     # Regenerate embedding in background
     async def regenerate_embedding_task():
-        """Background task to regenerate embedding."""
+        """Background task to regenerate embedding in tenant-specific collection."""
         try:
+            # Get tenant-specific vector store
+            tenant_vector_store = get_vector_store(tenant_id=tenant_id)
+
             # Generate new embedding vector
             vector = await embedding_service.generate_embedding(new_text)
-            
+
             # Create EmbeddingVector model
             embedding = EmbeddingVector(
                 storage_object_id=obj.id,
@@ -2733,9 +2741,9 @@ async def update_embedding_text(
                     "ai_tags": obj.ai_tags or []
                 }
             )
-            
-            # Upsert into Chroma
-            vector_store.upsert_embedding(embedding)
+
+            # Upsert into tenant-specific Chroma collection
+            tenant_vector_store.upsert_embedding(embedding)
             
             print(f"✅ [Embedding Update] Object {obj.id}: Updated {len(vector)}-dim vector in Knowledge Graph")
         except Exception as e:
