@@ -16,6 +16,7 @@ from pathlib import Path
 import os
 
 from knowledge_graph.models import EmbeddingVector
+from config import settings as app_settings
 
 
 class VectorStore:
@@ -31,14 +32,10 @@ class VectorStore:
 
         Args:
             persist_directory: Directory to persist ChromaDB data.
-                              Defaults to /var/lib/chromadb on server, ./chromadb locally.
+                              Defaults to CHROMA_DB_PATH from settings.
         """
         if persist_directory is None:
-            # Default location based on environment
-            if os.path.exists("/var/lib"):
-                persist_directory = "/var/lib/chromadb"
-            else:
-                persist_directory = "./chromadb"
+            persist_directory = app_settings.CHROMA_DB_PATH
 
         persist_path = Path(persist_directory)
         persist_path.mkdir(parents=True, exist_ok=True)
