@@ -24,8 +24,8 @@ from ai_analysis.prompts import (
 import asyncio
 
 # API configuration
-INTERNAL_API_KEY = "Inetpass1"
-API_BASE_URL = "http://127.0.0.1:8001"  # Internal communication
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "Inetpass1")
+API_BASE_URL = os.getenv("AI_API_URL", "https://api-ai.arkturian.com")  # AI microservice
 
 # CSV Chunking configuration
 CSV_CHUNK_SIZE = 10  # Process 10 rows per chunk (small for testing/debugging)
