@@ -72,6 +72,8 @@ jobs:
               --exclude='*.pyc' \
               --exclude='.env' \
               --exclude='venv' \
+              --exclude='storage.db' \
+              --exclude='chroma_db' \
               "$REPO_PATH/" "$DEPLOY_PATH/"
 
             # Install dependencies in deployment directory
@@ -82,8 +84,8 @@ jobs:
             chown -R www-data:www-data "$DEPLOY_PATH"
             chmod -R 755 "$DEPLOY_PATH"
 
-            # Database Migration with Backup
-            DB_PATH="/var/lib/api-arkturian/storage.db"
+            # Database Backup (IMPORTANT: DB is in DEPLOY_PATH, NOT /var/lib!)
+            DB_PATH="$DEPLOY_PATH/storage.db"
             DB_BACKUP="/var/backups/storage-db-${TIMESTAMP}.db"
 
             if [ -f "$DB_PATH" ]; then
