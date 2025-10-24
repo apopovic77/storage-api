@@ -119,3 +119,23 @@ jobs:
       - name: Notify on failure
         if: failure()
         run: echo "❌ Deployment failed for commit ${{ github.sha }}"
+
+  trigger-sdk-regeneration:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - name: Trigger TypeScript SDK regeneration
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: apopovic77/storage-api-typescript-sdk
+          event-type: openapi-updated
+
+      - name: Trigger C# SDK regeneration
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: apopovic77/storage-api-csharp-sdk
+          event-type: openapi-updated
