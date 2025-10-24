@@ -158,6 +158,7 @@ class StorageObjectResponse(BaseModel):
     external_uri: Optional[str] = None
     ai_context_metadata: Optional[Dict[str, Any]] = None
     tenant_id: str = "arkturian"
+    owner_email: Optional[str] = None  # Populated from join in search queries
 
     class Config:
         from_attributes = True
