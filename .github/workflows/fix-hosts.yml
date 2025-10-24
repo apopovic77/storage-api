@@ -1,0 +1,47 @@
+name: Fix Hosts Entry (Temporary)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix-hosts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add hosts entry for api-ai.arkturian.com
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            
+            echo "🔧 Adding temporary hosts entry for api-ai.arkturian.com"
+            
+            # Check if entry already exists
+            if grep -q "api-ai.arkturian.com" /etc/hosts; then
+              echo "⚠️  Entry already exists in /etc/hosts"
+              grep "api-ai.arkturian.com" /etc/hosts
+            else
+              # Add entry pointing to localhost (since AI service runs on same server)
+              echo "127.0.0.1 api-ai.arkturian.com" | tee -a /etc/hosts
+              echo "✅ Added hosts entry"
+            fi
+            
+            echo ""
+            echo "📋 Current /etc/hosts entries for api-ai:"
+            grep "api-ai" /etc/hosts || echo "No entries found"
+            
+            echo ""
+            echo "🔄 Restarting storage-api service..."
+            systemctl restart storage-api
+            
+            echo ""
+            echo "📊 Service status:"
+            systemctl status storage-api --no-pager -l || true
+            
+            echo ""
+            echo "✅ Done! DNS will resolve locally until propagation completes."
+
