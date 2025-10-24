@@ -43,9 +43,19 @@ done
 
 cd "$REPO_ROOT"
 
+# Check for uncommitted changes and auto-commit them
 if [[ -n "$(git status --porcelain)" ]]; then
-  echo "Error: working tree has uncommitted changes. Please commit or stash them first." >&2
-  exit 1
+  printf '\n==> Auto-committing changes for release\n'
+  
+  # Generate informative commit message
+  changed_files=$(git status --porcelain | wc -l | xargs)
+  timestamp=$(date '+%Y-%m-%d %H:%M')
+  commit_msg="Release preparation - ${changed_files} files updated [${timestamp}]"
+  
+  git add -A
+  git commit -m "$commit_msg"
+  
+  echo "✅ Auto-committed: $commit_msg"
 fi
 
 printf '\n==> Syncing %s branch\n' "$DEV_BRANCH"
