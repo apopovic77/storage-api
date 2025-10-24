@@ -112,7 +112,7 @@ class AsyncTask(Base):
 # Pydantic Models for API
 class StorageObjectResponse(BaseModel):
     id: int
-    owner_user_id: int
+    owner_user_id: Optional[int] = None  # Some legacy objects have no owner
     object_key: str
     original_filename: str
     file_url: str
