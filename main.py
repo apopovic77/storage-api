@@ -10,9 +10,11 @@ Handles:
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from storage import routes as storage_routes
 from tenancy import routes as tenant_routes
 from admin import routes as admin_routes
+from pathlib import Path
 
 app = FastAPI(
     title="Storage API",
@@ -28,6 +30,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static files for uploads (must be before routers for proper precedence)
+uploads_dir = Path("/var/www/uploads")
+if uploads_dir.exists():
+    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 # Include routers
 app.include_router(storage_routes.router, prefix="/storage", tags=["Storage"])
