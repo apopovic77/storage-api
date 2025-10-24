@@ -1,0 +1,36 @@
+name: Check NGINX Config
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check NGINX configs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            echo "=== NGINX sites-enabled ==="
+            ls -la /etc/nginx/sites-enabled/
+            
+            echo ""
+            echo "=== api-ai config ==="
+            cat /etc/nginx/sites-enabled/api-ai.arkturian.com 2>/dev/null || echo "Config not found"
+            
+            echo ""
+            echo "=== api-storage config ==="
+            cat /etc/nginx/sites-enabled/api-storage.arkturian.com 2>/dev/null || echo "Config not found"
+            
+            echo ""
+            echo "=== api-artrack config ==="
+            cat /etc/nginx/sites-enabled/api-artrack.arkturian.com 2>/dev/null || echo "Config not found"
+            
+            echo ""
+            echo "=== Storage API Error Logs (last 20 lines) ==="
+            tail -20 /var/log/storage-api-error.log 2>/dev/null || echo "Log not found"
+
