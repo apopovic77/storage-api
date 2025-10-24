@@ -2025,7 +2025,16 @@ def list_objects(
                 pass
 
         response_items.append(response_obj)
-    return StorageListResponse(items=response_items)
+    
+    # Get total count for pagination
+    total = q.count()
+    
+    return StorageListResponse(
+        items=response_items,
+        total=total,
+        limit=limit,
+        offset=0  # TODO: Add offset parameter for pagination
+    )
 
 
 @router.get("/files/{object_id}")
