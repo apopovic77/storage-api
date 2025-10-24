@@ -32,6 +32,9 @@ class Settings:
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
     API_KEY: str = os.getenv("API_KEY", "Inetpass1")
+    
+    # User Settings
+    NEW_USER_TRUST_LEVEL: str = os.getenv("NEW_USER_TRUST_LEVEL", "user")
 
     # Media Settings
     MAX_FILE_SIZE: int = int(os.getenv("STORAGE_MAX_FILE_SIZE", os.getenv("MAX_FILE_SIZE", "524288000")))  # 500MB default
