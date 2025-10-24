@@ -139,3 +139,17 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: apopovic77/storage-api-csharp-sdk
           event-type: openapi-updated
+
+  trigger-e2e-tests:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - name: Trigger E2E tests
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: apopovic77/api-e2e-tests
+          event-type: storage-api-deployed
+          client-payload: '{"api": "storage", "sha": "${{ github.sha }}"}'
