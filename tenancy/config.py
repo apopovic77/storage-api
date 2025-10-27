@@ -14,6 +14,7 @@ import os
 TENANT_CONFIG_PATH = Path(os.getenv("TENANT_CONFIG_PATH", "./tenant_config.json"))
 _DEFAULT_MAP: Dict[str, str] = {
     "Inetpass1": "arkturian",
+    "oneal_demo_token": "oneal",  # O'Neal tenant access
 }
 
 
