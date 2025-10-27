@@ -73,8 +73,26 @@ printf '\n==> Syncing %s branch\n' "$MAIN_BRANCH"
 
 printf '\n==> Fast-forwarding %s from %s\n' "$MAIN_BRANCH" "$DEV_BRANCH"
 if ! git merge --ff-only "$DEV_BRANCH"; then
-  echo "Error: $MAIN_BRANCH cannot fast-forward from $DEV_BRANCH. Resolve manually (likely $MAIN_BRANCH is ahead)." >&2
-  exit 1
+  echo "⚠️  Cannot fast-forward - branches have diverged."
+  echo "🔄 Auto-syncing: merging $MAIN_BRANCH into $DEV_BRANCH first..."
+  
+  # Switch back to dev and merge main
+  "$CHECKOUT_SCRIPT" "$DEV_BRANCH"
+  git merge "$MAIN_BRANCH" -m "Auto-sync: Merge $MAIN_BRANCH into $DEV_BRANCH before release"
+  
+  echo "✅ Branches synced. Pushing $DEV_BRANCH..."
+  git push origin "$DEV_BRANCH"
+  
+  # Now switch to main and try fast-forward again
+  "$CHECKOUT_SCRIPT" "$MAIN_BRANCH"
+  echo "🔄 Retrying fast-forward..."
+  
+  if ! git merge --ff-only "$DEV_BRANCH"; then
+    echo "❌ Error: Still cannot fast-forward after sync. Manual intervention needed." >&2
+    exit 1
+  fi
+  
+  echo "✅ Fast-forward successful after sync!"
 fi
 
 git push origin "$MAIN_BRANCH"

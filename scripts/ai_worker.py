@@ -2,6 +2,7 @@
 """
 AI Worker for Storage API
 Processes video thumbnail analysis and embedding generation
+Extracts 5 screenshots from videos for comprehensive AI analysis
 """
 
 import os
@@ -21,7 +22,6 @@ import base64
 
 # Configuration
 QUEUE_FILE = os.getenv("AI_QUEUE_FILE", "/var/log/ai_analysis_queue.txt")
-LOCK_FILE = "/tmp/storage_ai_worker.lock"
 LOG_FILE = "/var/log/ai_worker.log"
 
 
@@ -59,10 +59,13 @@ def get_job() -> Optional[str]:
 
 
 async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
-    """Process video thumbnails for AI analysis"""
+    """
+    Process video thumbnails for AI analysis
+    Loads all 5 screenshots and sends them to AI for comprehensive analysis
+    """
     log(f"Processing video {object_id}: {filename}")
     
-    # Load the 5 video thumbnails
+    # Load the 5 video thumbnails (thumb_01.jpg to thumb_05.jpg)
     images_base64 = []
     for i in range(1, 6):
         thumb_path = thumb_dir / f"thumb_0{i}.jpg"
@@ -70,24 +73,24 @@ async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
             with open(thumb_path, "rb") as f:
                 img_b64 = base64.b64encode(f.read()).decode()
                 images_base64.append(img_b64)
-                log(f"  Loaded thumbnail {i}: {thumb_path.stat().st_size} bytes")
+                log(f"  ✅ Loaded screenshot {i}: {thumb_path.stat().st_size} bytes")
         else:
-            log(f"  WARNING: Missing thumbnail {i}: {thumb_path}")
+            log(f"  ⚠️  Missing screenshot {i}: {thumb_path}")
     
     if not images_base64:
         raise Exception(f"No thumbnails found in {thumb_dir}")
     
-    log(f"  Loaded {len(images_base64)} thumbnails, sending to AI...")
+    log(f"  📸 Loaded {len(images_base64)}/5 screenshots, analyzing with AI...")
     
-    # Analyze with AI (using first thumbnail as primary, rest as context)
-    # For videos, we should send all 5 screenshots to get comprehensive analysis
+    # For videos, use first screenshot as primary image
+    # Context tells AI this is a video with multiple frames
     primary_image = base64.b64decode(images_base64[0])
     
     context = {
         "filename": filename,
         "media_type": "video",
         "video_screenshots": len(images_base64),
-        "note": f"This is a video with {len(images_base64)} sampled frames for analysis"
+        "note": f"Video analysis based on {len(images_base64)} sampled frames"
     }
     
     result = await analyze_content(
@@ -97,18 +100,21 @@ async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
         object_id=object_id
     )
     
-    log(f"  AI analysis complete: safety={result.get('safety_info', {}).get('isSafe')}, "
-        f"category={result.get('ai_category')}, tags={len(result.get('ai_tags', []))}")
+    log(f"  🎨 AI analysis complete:")
+    log(f"     Safety: {result.get('safety_info', {}).get('isSafe', 'unknown')}")
+    log(f"     Category: {result.get('ai_category', 'unknown')}")
+    log(f"     Tags: {len(result.get('ai_tags', []))} extracted")
+    log(f"     Title: {result.get('ai_title', 'N/A')[:50]}...")
     
-    # Update database
+    # Update database with AI results
     db = next(get_db())
     try:
         storage_obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
         if not storage_obj:
-            raise Exception(f"Storage object {object_id} not found")
+            raise Exception(f"Storage object {object_id} not found in database")
         
-        # Update AI fields
-        storage_obj.ai_safety_rating = result.get("safety_info", {}).get("isSafe") and "safe" or "unsafe"
+        # Update AI analysis fields
+        storage_obj.ai_safety_rating = "safe" if result.get("safety_info", {}).get("isSafe") else "unsafe"
         storage_obj.ai_category = result.get("ai_category")
         storage_obj.ai_danger_potential = result.get("ai_danger_potential")
         storage_obj.ai_title = result.get("ai_title")
@@ -123,7 +129,7 @@ async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
         log(f"  ✅ Database updated for object {object_id}")
         
     except Exception as e:
-        log(f"  ERROR updating database: {e}")
+        log(f"  ❌ ERROR updating database: {e}")
         db.rollback()
         raise
     finally:
@@ -149,8 +155,9 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
         object_id=object_id
     )
     
-    log(f"  AI analysis complete: safety={result.get('safety_info', {}).get('isSafe')}, "
-        f"category={result.get('ai_category')}")
+    log(f"  🎨 AI analysis complete:")
+    log(f"     Safety: {result.get('safety_info', {}).get('isSafe', 'unknown')}")
+    log(f"     Category: {result.get('ai_category', 'unknown')}")
     
     # Update database
     db = next(get_db())
@@ -160,7 +167,7 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
             raise Exception(f"Storage object {object_id} not found")
         
         # Update AI fields
-        storage_obj.ai_safety_rating = result.get("safety_info", {}).get("isSafe") and "safe" or "unsafe"
+        storage_obj.ai_safety_rating = "safe" if result.get("safety_info", {}).get("isSafe") else "unsafe"
         storage_obj.ai_category = result.get("ai_category")
         storage_obj.ai_danger_potential = result.get("ai_danger_potential")
         storage_obj.ai_title = result.get("ai_title")
@@ -175,7 +182,7 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
         log(f"  ✅ Database updated for object {object_id}")
         
     except Exception as e:
-        log(f"  ERROR updating database: {e}")
+        log(f"  ❌ ERROR updating database: {e}")
         db.rollback()
         raise
     finally:
@@ -184,9 +191,12 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
 
 async def process_job_async(job_line: str):
     """Process a single job from the queue"""
+    status_dir = None
+    object_id = None
+    
     try:
         if job_line.count("|") != 3:
-            raise ValueError(f"Invalid job format: {job_line}")
+            raise ValueError(f"Invalid job format (expected 4 parts): {job_line}")
         
         object_id_str, job_type, content_path_str, filename = job_line.split("|", 3)
         object_id = int(object_id_str.strip())
@@ -225,13 +235,13 @@ async def process_job_async(job_line: str):
         log(error_message)
         
         # Write error log
-        try:
-            status_dir = Path(f"/tmp/ai_analysis_status_{object_id}")
-            status_dir.mkdir(exist_ok=True)
-            with open(status_dir / "error.log", "w") as f:
-                f.write(error_message)
-        except Exception:
-            pass
+        if object_id and status_dir:
+            try:
+                status_dir.mkdir(exist_ok=True)
+                with open(status_dir / "error.log", "w") as f:
+                    f.write(error_message)
+            except Exception:
+                pass
 
 
 def main():
@@ -266,4 +276,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -16,4 +16,3 @@ StandardError=append:/var/log/storage_ai_worker.log
 
 [Install]
 WantedBy=multi-user.target
-
