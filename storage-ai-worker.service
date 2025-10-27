@@ -1,0 +1,19 @@
+[Unit]
+Description=Storage API AI Worker
+After=network.target storage-api.service api-ai.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/repos/storage-api
+Environment="AI_QUEUE_FILE=/var/log/ai_analysis_queue.txt"
+Environment="PYTHONPATH=/opt/repos/storage-api"
+ExecStart=/usr/bin/python3 /opt/repos/storage-api/scripts/ai_worker.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/storage_ai_worker.log
+StandardError=append:/var/log/storage_ai_worker.log
+
+[Install]
+WantedBy=multi-user.target
+
