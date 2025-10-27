@@ -25,7 +25,7 @@ import asyncio
 
 # API configuration
 INTERNAL_API_KEY = "Inetpass1"
-API_BASE_URL = "http://127.0.0.1:8001"  # Internal communication
+API_BASE_URL = "http://127.0.0.1:8003"  # AI-API Service (correct port)
 
 # CSV Chunking configuration
 CSV_CHUNK_SIZE = 10  # Process 10 rows per chunk (small for testing/debugging)
