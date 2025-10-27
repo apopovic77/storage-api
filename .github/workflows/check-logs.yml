@@ -1,0 +1,39 @@
+name: Check API Logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-logs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check storage-api logs and test api-ai
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            
+            echo "=== Testing api-ai from server ==="
+            curl -s http://127.0.0.1:8003/health || echo "❌ api-ai not responding on 8003"
+            
+            echo ""
+            echo "=== Testing storage-api from server ==="
+            curl -s http://127.0.0.1:8002/health -H "X-API-KEY: Inetpass1" || echo "❌ storage-api not responding on 8002"
+            
+            echo ""
+            echo "=== storage-api error logs (last 30 lines) ==="
+            tail -30 /var/log/storage-api-error.log || echo "No error log found"
+            
+            echo ""
+            echo "=== api-ai logs (last 20 lines) ==="
+            journalctl -u api-ai -n 20 --no-pager || echo "No api-ai logs"
+            
+            echo ""
+            echo "=== storage-api service status ==="
+            systemctl status storage-api --no-pager -l | head -15
+

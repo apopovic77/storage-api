@@ -13,12 +13,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from storage import routes as storage_routes
 from tenancy import routes as tenant_routes
 from admin import routes as admin_routes
+from database import connect_db, disconnect_db
 
 app = FastAPI(
     title="Storage API",
     version="1.0.0",
     description="Media storage and AI analysis service with multi-tenancy support"
 )
+
+# Database lifecycle events
+@app.on_event("startup")
+async def startup():
+    await connect_db()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await disconnect_db()
 
 # CORS
 app.add_middleware(

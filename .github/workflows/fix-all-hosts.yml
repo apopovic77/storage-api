@@ -1,0 +1,59 @@
+name: Fix All API Hosts Entries
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix-hosts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add hosts entries for all APIs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            
+            echo "🔧 Adding hosts entries for all APIs..."
+            
+            ENTRIES=(
+              "192.46.232.130 api-ai.arkturian.com"
+              "192.46.232.130 api-artrack.arkturian.com"
+              "192.46.232.130 api-storage.arkturian.com"
+            )
+            
+            for entry in "${ENTRIES[@]}"; do
+              domain=$(echo $entry | awk '{print $2}')
+              
+              if grep -q "$domain" /etc/hosts; then
+                echo "⚠️  $domain already in /etc/hosts"
+                grep "$domain" /etc/hosts
+              else
+                echo "$entry" | tee -a /etc/hosts
+                echo "✅ Added: $entry"
+              fi
+            done
+            
+            echo ""
+            echo "📋 Current /etc/hosts entries for APIs:"
+            grep "arkturian.com" /etc/hosts || echo "No entries found"
+            
+            echo ""
+            echo "🔄 Restarting all API services..."
+            systemctl restart api-ai || echo "⚠️  api-ai service may not exist yet"
+            systemctl restart storage-api || echo "⚠️  storage-api not restarted"
+            systemctl restart artrack-api || echo "⚠️  artrack-api service may not exist yet"
+            
+            echo ""
+            echo "📊 Service statuses:"
+            systemctl status api-ai --no-pager -l | head -10 || true
+            systemctl status storage-api --no-pager -l | head -10 || true
+            systemctl status artrack-api --no-pager -l | head -10 || true
+            
+            echo ""
+            echo "✅ Done! All hosts entries added."
+

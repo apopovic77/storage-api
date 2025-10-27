@@ -24,6 +24,9 @@ class Settings:
     STORAGE_UPLOAD_DIR: str = os.getenv("STORAGE_UPLOAD_DIR", "./uploads/storage")
     BASE_URL: str = os.getenv("STORAGE_BASE_URL", os.getenv("BASE_URL", "https://api-storage.arkturian.com"))
 
+    # ChromaDB / Knowledge Graph
+    CHROMA_DB_PATH: str = os.getenv("CHROMA_DB_PATH", "./chroma_db")
+
     # API Keys
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
