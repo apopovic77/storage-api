@@ -869,7 +869,7 @@ async def upload_file(
                 
                 if validation_result["valid"]:
                     # Update original video with HLS URL (prefer VOD domain for playback)
-                    hls_url = f"https://vod.arkturian.com/media/{hls_extract_dir.name}/master.m3u8"
+                    hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{hls_extract_dir.name}/master.m3u8"
                     original_video.hls_url = hls_url
                     
                     if validation_result.get("width"):
@@ -909,8 +909,12 @@ async def upload_file(
                     except Exception:
                         pass
                     
+                    # Mark transcoding as completed
+                    original_video.transcoding_status = "completed"
+                    
                     db.commit()
                     print(f"📦 SUCCESS: Original video {original_video.id} updated with HLS URL: {hls_url}")
+                    print(f"📦 Transcoding status set to: completed")
                     
                     # Delete ZIP file and temp entry
                     try:
@@ -1419,7 +1423,7 @@ def get_asset_variant_references(
             hls_dir_path = path.parent / basename
             master = hls_dir_path / "master.m3u8"
             if master.exists():
-                hls_url = f"https://vod.arkturian.com/media/{basename}/master.m3u8"
+                hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
         except Exception:
             pass
 
@@ -1573,7 +1577,7 @@ def get_asset_variant_references_batch(
             hls_dir_path = path.parent / basename
             master = hls_dir_path / "master.m3u8"
             if master.exists():
-                hls_url = f"https://vod.arkturian.com/media/{basename}/master.m3u8"
+                hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
         except Exception:
             pass
 
@@ -1841,6 +1845,95 @@ def get_media_variant(
     }.get(suffix, "image/jpeg")
     return FileResponse(dest_path, media_type=media_type, filename=dest_path.name)
 
+
+@router.get("/proxy")
+async def proxy_external_image(
+    url: str = Query(..., description="External image URL to proxy"),
+    width: Optional[int] = Query(None, ge=1, description="Target width in pixels"),
+    height: Optional[int] = Query(None, ge=1, description="Target height in pixels"),
+    format: Optional[str] = Query(None, description="Output format: jpg | png | webp"),
+    quality: Optional[int] = Query(None, ge=1, le=100, description="JPEG/WebP quality (1-100)"),
+):
+    """
+    Proxy and transform external images with caching.
+    
+    This endpoint:
+    1. Fetches the external image (with 24h cache)
+    2. Applies transformations (resize, format conversion, quality)
+    3. Caches the transformed result
+    4. Returns the optimized image
+    
+    Example:
+        /storage/proxy?url=https://example.com/image.png&width=400&format=webp&quality=80
+    """
+    try:
+        # Fetch external file (uses cache automatically)
+        data, metadata = await fetch_external_file(url, use_cache=True)
+        
+        # Determine source format from content-type
+        content_type = metadata.get('content-type', 'image/jpeg')
+        
+        # If no transformations requested, return original
+        if not width and not height and not format and not quality:
+            return Response(content=data, media_type=content_type)
+        
+        # Apply transformations using PIL
+        from PIL import Image
+        from io import BytesIO
+        
+        # Load image
+        img = Image.open(BytesIO(data))
+        
+        # Resize if requested
+        if width or height:
+            w, h = img.size
+            if width and height:
+                target_w, target_h = width, height
+            elif width:
+                target_w = width
+                target_h = int(h * (width / max(w, 1)))
+            else:  # height only
+                target_h = height
+                target_w = int(w * (height / max(h, 1)))
+            
+            img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        
+        # Convert format if requested
+        target_format = (format or "webp").lower()
+        if target_format not in {"jpg", "jpeg", "png", "webp"}:
+            target_format = "webp"
+        
+        # Convert to RGB if saving as JPEG
+        if target_format in {"jpg", "jpeg"} and img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+        
+        # Save to bytes
+        output = BytesIO()
+        save_kwargs = {}
+        if target_format in {"jpg", "jpeg"}:
+            save_kwargs = {"quality": quality or 85, "optimize": True}
+            pil_format = "JPEG"
+            media_type = "image/jpeg"
+        elif target_format == "webp":
+            save_kwargs = {"quality": quality or 85, "method": 6}
+            pil_format = "WEBP"
+            media_type = "image/webp"
+        else:  # png
+            save_kwargs = {"optimize": True}
+            pil_format = "PNG"
+            media_type = "image/png"
+        
+        img.save(output, format=pil_format, **save_kwargs)
+        output.seek(0)
+        
+        return Response(content=output.read(), media_type=media_type)
+        
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch external URL: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
+
+
 @router.get("/objects/{object_id}", response_model=StorageObjectResponse)
 def get_object_metadata(
     object_id: int,
@@ -1886,7 +1979,7 @@ def get_object_metadata(
 
             master = hls_dir_path / "master.m3u8"
             if master.exists():
-                response_obj.hls_url = f"https://vod.arkturian.com/media/{basename}/master.m3u8"
+                response_obj.hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
                 size_file = hls_dir_path / "hls_size.txt"
                 if size_file.exists():
                     try:
@@ -1970,7 +2063,7 @@ def list_objects(
 
                 master = hls_dir_path / "master.m3u8"
                 if master.exists():
-                    response_obj.hls_url = f"https://vod.arkturian.com/media/{basename}/master.m3u8"
+                    response_obj.hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
                     size_file = hls_dir_path / "hls_size.txt"
                     if size_file.exists():
                         try:
@@ -2843,7 +2936,7 @@ async def get_oneal_product_enriched(
     if storage_obj:
         product["storage"] = {
             "id": storage_obj.id,
-            "media_url": f"https://api.arkturian.com/storage/media/{storage_obj.id}",
+            "media_url": f"https://api-storage.arkturian.com/storage/media/{storage_obj.id}",
             "thumbnail_url": storage_obj.thumbnail_url,
             "ai_title": storage_obj.ai_title,
             "ai_tags": storage_obj.ai_tags,
@@ -2899,11 +2992,11 @@ async def list_oneal_products_enriched(
                 StorageObject.context == context_value,
                 StorageObject.tenant_id == "oneal"
             ).first()
-            
+
             if storage_obj:
                 product["storage"] = {
                     "id": storage_obj.id,
-                    "media_url": f"https://api.arkturian.com/storage/media/{storage_obj.id}"
+                    "media_url": f"https://api-storage.arkturian.com/storage/media/{storage_obj.id}"
                 }
     
     data["results"] = products
