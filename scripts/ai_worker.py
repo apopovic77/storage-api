@@ -128,6 +128,21 @@ async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
         db.commit()
         log(f"  ✅ Database updated for object {object_id}")
         
+        # Trigger Knowledge Graph Pipeline for embedding generation
+        try:
+            log(f"  🔗 Generating Knowledge Graph embedding...")
+            from knowledge_graph.pipeline import KnowledgeGraphPipeline
+            
+            pipeline = KnowledgeGraphPipeline()
+            kg_entry = await pipeline.process_storage_object(storage_obj, db)
+            
+            if kg_entry:
+                log(f"  ✅ Embedding generated and stored in ChromaDB")
+            else:
+                log(f"  ⚠️  No embedding generated (object may not have AI context)")
+        except Exception as kg_error:
+            log(f"  ⚠️  Knowledge Graph error (non-fatal): {kg_error}")
+        
     except Exception as e:
         log(f"  ❌ ERROR updating database: {e}")
         db.rollback()
@@ -180,6 +195,21 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
         
         db.commit()
         log(f"  ✅ Database updated for object {object_id}")
+        
+        # Trigger Knowledge Graph Pipeline for embedding generation
+        try:
+            log(f"  🔗 Generating Knowledge Graph embedding...")
+            from knowledge_graph.pipeline import KnowledgeGraphPipeline
+            
+            pipeline = KnowledgeGraphPipeline()
+            kg_entry = await pipeline.process_storage_object(storage_obj, db)
+            
+            if kg_entry:
+                log(f"  ✅ Embedding generated and stored in ChromaDB")
+            else:
+                log(f"  ⚠️  No embedding generated (object may not have AI context)")
+        except Exception as kg_error:
+            log(f"  ⚠️  Knowledge Graph error (non-fatal): {kg_error}")
         
     except Exception as e:
         log(f"  ❌ ERROR updating database: {e}")
