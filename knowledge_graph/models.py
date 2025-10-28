@@ -132,10 +132,12 @@ class EmbeddingVector:
         Returns:
             tuple: (id, embedding, metadata, document)
         """
+        # ChromaDB only accepts str, int, float, bool - filter out None values
+        filtered_metadata = {k: v for k, v in self.metadata.items() if v is not None}
         metadata = {
             "object_id": self.object_id,
             "model": self.model,
-            **self.metadata
+            **filtered_metadata
         }
         return (
             self.chroma_id,

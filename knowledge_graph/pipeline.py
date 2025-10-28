@@ -88,7 +88,7 @@ class KnowledgeGraphPipeline:
             # STEP 2: Check for AI embeddingsList (multi-embedding mode)
             embeddings_list = None
             primary_embedding_text = None
-            embedding_quality = None
+            embedding_quality = {}  # Default to empty dict to avoid NoneType errors
 
             if storage_obj.ai_context_metadata:
                 embedding_info = storage_obj.ai_context_metadata.get("embedding_info", {})
@@ -324,9 +324,12 @@ class KnowledgeGraphPipeline:
                 import json
                 sanitized_metadata = {}
                 for key, value in full_metadata.items():
-                    if isinstance(value, (list, dict)):
+                    if value is None:
+                        # Skip None values - ChromaDB doesn't accept them
+                        continue
+                    elif isinstance(value, (list, dict)):
                         sanitized_metadata[key] = json.dumps(value, ensure_ascii=False)
-                    elif value is None or isinstance(value, (str, int, float, bool)):
+                    elif isinstance(value, (str, int, float, bool)):
                         sanitized_metadata[key] = value
                     else:
                         # Convert other types to string

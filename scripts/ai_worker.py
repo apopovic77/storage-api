@@ -122,7 +122,15 @@ async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
         storage_obj.ai_tags = result.get("ai_tags")
         storage_obj.ai_collections = result.get("ai_collections")
         storage_obj.safety_info = result.get("safety_info")
-        storage_obj.ai_context_metadata = result.get("ai_context_metadata") or {}
+        
+        # Build ai_context_metadata from result
+        ai_context = {
+            "embedding_info": result.get("embedding_info", {}),
+            "prompt": result.get("prompt", ""),
+            "ai_response": result.get("ai_response", ""),
+            "mode": result.get("mode", "unknown")
+        }
+        storage_obj.ai_context_metadata = ai_context
         storage_obj.ai_safety_status = "completed"
         
         db.commit()
@@ -154,6 +162,14 @@ async def process_video_job(object_id: int, thumb_dir: Path, filename: str):
 async def process_image_job(object_id: int, file_path: Path, filename: str):
     """Process single image for AI analysis"""
     log(f"Processing image {object_id}: {filename}")
+    
+    # If file_path is a directory, look for image.jpg inside
+    if file_path.is_dir():
+        actual_file = file_path / "image.jpg"
+        if not actual_file.exists():
+            raise FileNotFoundError(f"Expected image.jpg in {file_path}")
+        file_path = actual_file
+        log(f"  📂 Found image in directory: {file_path}")
     
     with open(file_path, "rb") as f:
         image_data = f.read()
@@ -190,7 +206,15 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
         storage_obj.ai_tags = result.get("ai_tags")
         storage_obj.ai_collections = result.get("ai_collections")
         storage_obj.safety_info = result.get("safety_info")
-        storage_obj.ai_context_metadata = result.get("ai_context_metadata") or {}
+        
+        # Build ai_context_metadata from result
+        ai_context = {
+            "embedding_info": result.get("embedding_info", {}),
+            "prompt": result.get("prompt", ""),
+            "ai_response": result.get("ai_response", ""),
+            "mode": result.get("mode", "unknown")
+        }
+        storage_obj.ai_context_metadata = ai_context
         storage_obj.ai_safety_status = "completed"
         
         db.commit()
@@ -208,6 +232,94 @@ async def process_image_job(object_id: int, file_path: Path, filename: str):
                 log(f"  ✅ Embedding generated and stored in ChromaDB")
             else:
                 log(f"  ⚠️  No embedding generated (object may not have AI context)")
+        except Exception as kg_error:
+            log(f"  ⚠️  Knowledge Graph error (non-fatal): {kg_error}")
+        
+    except Exception as e:
+        log(f"  ❌ ERROR updating database: {e}")
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+async def process_text_job(object_id: int, file_path: Path, filename: str):
+    """
+    Process text/CSV files for AI analysis
+    """
+    log(f"Processing text/CSV {object_id}: {filename}")
+    
+    # Read file content
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        # Try with latin-1 encoding as fallback
+        with open(file_path, "r", encoding="latin-1") as f:
+            content = f.read()
+    
+    # Determine MIME type based on extension
+    mime_type = "application/csv" if filename.lower().endswith('.csv') else "text/plain"
+    
+    log(f"  📄 File size: {len(content)} bytes, MIME: {mime_type}")
+    
+    context = {
+        "filename": filename,
+        "media_type": "text",
+        "file_extension": filename.split('.')[-1].lower() if '.' in filename else "txt"
+    }
+    
+    # Call analyze_content with text data
+    result = await analyze_content(
+        data=content.encode('utf-8'),
+        mime_type=mime_type,
+        context=context,
+        object_id=object_id
+    )
+    
+    log(f"  📊 AI analysis complete:")
+    log(f"     Mode: {result.get('mode', 'unknown')}")
+    log(f"     Title: {result.get('ai_title', 'N/A')}")
+    
+    # Update database
+    db = next(get_db())
+    try:
+        storage_obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+        if not storage_obj:
+            raise Exception(f"Storage object {object_id} not found")
+        
+        # Update AI fields
+        storage_obj.ai_title = result.get("ai_title")
+        storage_obj.ai_subtitle = result.get("ai_subtitle")
+        storage_obj.ai_tags = result.get("ai_tags")
+        storage_obj.ai_collections = result.get("ai_collections")
+        storage_obj.ai_category = result.get("ai_category", "text")
+        
+        # Build ai_context_metadata from result
+        ai_context = {
+            "embedding_info": result.get("embedding_info", {}),
+            "prompt": result.get("prompt", ""),
+            "ai_response": result.get("ai_response", ""),
+            "mode": result.get("mode", "text")
+        }
+        storage_obj.ai_context_metadata = ai_context
+        storage_obj.ai_safety_status = "completed"
+        
+        db.commit()
+        log(f"  ✅ Database updated for object {object_id}")
+        
+        # Trigger Knowledge Graph Pipeline for embedding generation
+        try:
+            log(f"  🔗 Generating Knowledge Graph embeddings...")
+            from knowledge_graph.pipeline import KnowledgeGraphPipeline
+            
+            pipeline = KnowledgeGraphPipeline()
+            kg_entry = await pipeline.process_storage_object(storage_obj, db)
+            
+            if kg_entry:
+                log(f"  ✅ Embeddings generated and stored in ChromaDB")
+            else:
+                log(f"  ⚠️  No embeddings generated")
         except Exception as kg_error:
             log(f"  ⚠️  Knowledge Graph error (non-fatal): {kg_error}")
         
@@ -248,6 +360,8 @@ async def process_job_async(job_line: str):
             await process_video_job(object_id, content_path, filename)
         elif job_type == "image":
             await process_image_job(object_id, content_path, filename)
+        elif job_type == "text":
+            await process_text_job(object_id, content_path, filename)
         else:
             raise ValueError(f"Unsupported job type: {job_type}")
         

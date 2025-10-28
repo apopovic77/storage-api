@@ -23,7 +23,7 @@ class CollectionInfo(BaseModel):
     item_count: int
     owner_email: Optional[str] = None
 
-@router.get("/admin/users-with-collections", response_model=List[UserWithCollections])
+@router.get("/users-with-collections", response_model=List[UserWithCollections])
 def get_users_with_collections(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -59,7 +59,7 @@ def get_users_with_collections(
         for user in users_with_collections
     ]
 
-@router.get("/admin/collections", response_model=List[CollectionInfo])
+@router.get("/collections", response_model=List[CollectionInfo])
 def get_collections_for_user(
     user_email: Optional[str] = Query(None),
     public_only: bool = Query(False),

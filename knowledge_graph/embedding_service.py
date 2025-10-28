@@ -67,12 +67,17 @@ class EmbeddingService:
 
         # Extracted tags (from AI analysis)
         if storage_obj.ai_tags:
-            for key, value in storage_obj.ai_tags.items():
-                if value:
-                    if isinstance(value, list):
-                        parts.append(f"{key}: {', '.join(str(v) for v in value)}")
-                    else:
-                        parts.append(f"{key}: {value}")
+            if isinstance(storage_obj.ai_tags, list):
+                # ai_tags is a list of strings (new format)
+                parts.append(f"Tags: {', '.join(str(t) for t in storage_obj.ai_tags)}")
+            elif isinstance(storage_obj.ai_tags, dict):
+                # ai_tags is a dict (legacy format)
+                for key, value in storage_obj.ai_tags.items():
+                    if value:
+                        if isinstance(value, list):
+                            parts.append(f"{key}: {', '.join(str(v) for v in value)}")
+                        else:
+                            parts.append(f"{key}: {value}")
 
         # Context text (if available)
         if storage_obj.ai_context_metadata:
