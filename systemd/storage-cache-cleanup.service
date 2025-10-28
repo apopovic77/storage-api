@@ -1,0 +1,23 @@
+[Unit]
+Description=Storage API Cache Cleanup
+Documentation=https://github.com/apopovic77/storage-api
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/www/api-storage.arkturian.com
+ExecStart=/root/.pyenv/versions/3.11.9/bin/python3 scripts/cleanup_cache.py --max-size 1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=storage-cache-cleanup
+
+# Restart policy (don't restart on failure for oneshot)
+Restart=no
+
+# Resource limits
+CPUQuota=50%
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

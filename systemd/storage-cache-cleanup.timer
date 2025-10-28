@@ -1,0 +1,15 @@
+[Unit]
+Description=Storage API Cache Cleanup Timer
+Documentation=https://github.com/apopovic77/storage-api
+Requires=storage-cache-cleanup.service
+
+[Timer]
+# Run daily at 3:00 AM
+OnCalendar=daily
+# Random delay up to 30min to avoid server load spikes
+RandomizedDelaySec=30min
+# Run at boot if missed
+Persistent=true
+
+[Install]
+WantedBy=timers.target
