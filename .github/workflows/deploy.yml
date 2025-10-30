@@ -70,8 +70,13 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
+            set -euo pipefail
             echo "🚀 Deploying to staging..."
-            cd /var/www/api-storage.arkturian.com
+            TARGET_DIR="/var/www/api-storage.arkturian.com"
+            if [ -d /var/www/api-storage ]; then
+              TARGET_DIR="/var/www/api-storage"
+            fi
+            cd "$TARGET_DIR"
             git fetch origin
             git checkout dev
             git pull origin dev
@@ -105,8 +110,13 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
+            set -euo pipefail
             echo "🚀 Deploying to production..."
-            cd /var/www/api-storage
+            TARGET_DIR="/var/www/api-storage"
+            if [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
+              TARGET_DIR="/var/www/api-storage.arkturian.com"
+            fi
+            cd "$TARGET_DIR"
             git fetch origin
             git checkout main
             git pull origin main
