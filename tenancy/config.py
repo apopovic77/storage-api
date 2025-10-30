@@ -50,6 +50,16 @@ def list_tenant_keys() -> Dict[str, str]:
     return _load_map()
 
 
+def api_key_for_tenant(tenant_id: str) -> Optional[str]:
+    """Reverse lookup helper to find an API key for a given tenant."""
+    if not tenant_id:
+        return None
+    for key, value in _load_map().items():
+        if value == tenant_id:
+            return key
+    return None
+
+
 def upsert_tenant_key(api_key: str, tenant_id: str) -> Dict[str, str]:
     api_key = str(api_key)
     tenant_id = str(tenant_id)

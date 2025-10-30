@@ -6,7 +6,9 @@ from datetime import datetime
 import uuid
 import subprocess
 import json
+from io import BytesIO
 from pydantic import ValidationError
+import httpx
 try:
     import magic
 except Exception:
@@ -15,8 +17,11 @@ from typing import Optional, Tuple
 from PIL import Image
 import piexif
 
+from storage.external_proxy import fetch_external_file
+
 from config import settings
 from database import get_db
+from tenancy.config import api_key_for_tenant
 
 # TTS functionality is optional
 try:
@@ -502,6 +507,147 @@ class GenericStorageService:
         }
 
 generic_storage = GenericStorageService()
+
+
+async def _fetch_media_variant_via_http(
+    storage_obj,
+    tenant_id: str,
+    max_edge: int,
+    target_format: str,
+    quality: int,
+) -> Optional[Tuple[bytes, str]]:
+    """Attempt to fetch an optimized media variant via the public storage API."""
+
+    object_id = getattr(storage_obj, "id", None)
+    if not object_id:
+        return None
+
+    base_url = settings.BASE_URL.rstrip("/")
+    media_url = f"{base_url}/storage/media/{object_id}"
+
+    params = {}
+    if max_edge:
+        params["width"] = max_edge
+    if target_format:
+        params["format"] = target_format
+    if quality:
+        params["quality"] = quality
+
+    headers = {}
+    tenant_key = api_key_for_tenant(tenant_id)
+    if tenant_key:
+        headers["X-API-KEY"] = tenant_key
+    else:
+        default_key = getattr(settings, "API_KEY", None)
+        if default_key:
+            headers["X-API-KEY"] = default_key
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            response = await client.get(media_url, params=params, headers=headers)
+            response.raise_for_status()
+            content_type = response.headers.get(
+                "content-type",
+                f"image/{'jpeg' if target_format in {'jpg', 'jpeg'} else target_format}"
+            )
+            return response.content, content_type
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return None
+        raise
+    except Exception:
+        return None
+
+
+async def load_image_bytes_for_analysis(
+    storage_obj,
+    tenant_id: Optional[str] = None,
+    *,
+    max_edge: int = 1300,
+    target_format: str = "webp",
+    quality: int = 75,
+) -> Tuple[bytes, str]:
+    """Load an optimized image variant suitable for AI analysis.
+
+    Falls back to fetching external references when the local media file is missing.
+    Returns image bytes and the associated MIME type. Raises FileNotFoundError if
+    the source cannot be resolved.
+    """
+
+    target_format = (target_format or "webp").lower()
+    if target_format not in {"jpg", "jpeg", "png", "webp"}:
+        target_format = "webp"
+
+    mime_type = getattr(storage_obj, "mime_type", "") or ""
+    if not mime_type.lower().startswith("image/"):
+        raise ValueError("Storage object is not an image")
+
+    tenant = tenant_id or getattr(storage_obj, "tenant_id", None)
+    if not tenant:
+        metadata = getattr(storage_obj, "metadata_json", None) or {}
+        tenant = metadata.get("tenant_id", "arkturian")
+
+    object_key = getattr(storage_obj, "object_key", None)
+    src_path: Optional[Path] = None
+    if object_key:
+        candidate = generic_storage.absolute_path_for_key(object_key, tenant)
+        if candidate.exists():
+            src_path = candidate
+
+    image_source = None
+    if src_path and src_path.exists():
+        image_source = src_path
+    else:
+        external_uri = getattr(storage_obj, "external_uri", None)
+        if external_uri:
+            data, _metadata = await fetch_external_file(external_uri, use_cache=True)
+            image_source = BytesIO(data)
+        else:
+            fallback = await _fetch_media_variant_via_http(
+                storage_obj,
+                tenant,
+                max_edge,
+                target_format,
+                quality,
+            )
+            if fallback:
+                return fallback
+            raise FileNotFoundError(f"Image not found for storage object {getattr(storage_obj, 'id', 'unknown')}")
+
+    try:
+        with Image.open(image_source) as img:
+            img_format = target_format
+
+            if max_edge:
+                w, h = img.size
+                if w > 0 and h > 0:
+                    if w >= h:
+                        target_w = min(max_edge, w)
+                        target_h = int(h * (target_w / float(w)))
+                    else:
+                        target_h = min(max_edge, h)
+                        target_w = int(w * (target_h / float(h)))
+                    if target_w > 0 and target_h > 0 and (target_w != w or target_h != h):
+                        img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            if img_format in {"jpg", "jpeg"} and img.mode in {"RGBA", "LA", "P"}:
+                img = img.convert("RGB")
+
+            out_buffer = BytesIO()
+            save_kwargs = {}
+            if img_format in {"jpg", "jpeg"}:
+                save_kwargs = {"quality": quality, "optimize": True}
+                mime_out = "image/jpeg"
+                img.save(out_buffer, format="JPEG", **save_kwargs)
+            elif img_format == "png":
+                mime_out = "image/png"
+                img.save(out_buffer, format="PNG")
+            else:  # webp default
+                save_kwargs = {"quality": quality, "method": 6}
+                mime_out = "image/webp"
+                img.save(out_buffer, format="WEBP", **save_kwargs)
+
+            return out_buffer.getvalue(), mime_out
 
 
 def extract_thumbnails_for_ai(video_path: Path, output_dir: Path) -> int:

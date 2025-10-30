@@ -327,25 +327,40 @@ class AsyncPipelineManager:
         self._log(f"Task {task_info.task_id}: Running AI analysis")
 
         # Load file from storage
-        from storage.service import generic_storage
+        from storage.service import generic_storage, load_image_bytes_for_analysis
         tenant_id = getattr(storage_obj, 'tenant_id', None)
         if not tenant_id:
             meta = getattr(storage_obj, 'metadata_json', None) or {}
             tenant_id = meta.get('tenant_id')
         tenant_id = tenant_id or 'arkturian'
-        file_path = generic_storage.absolute_path_for_key(storage_obj.object_key, tenant_id)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File missing from storage: {file_path}")
+        mime_type = (storage_obj.mime_type or "")
+        if mime_type.lower().startswith("image/"):
+            data, mime_type = await load_image_bytes_for_analysis(
+                storage_obj,
+                tenant_id,
+                max_edge=1300,
+                target_format="webp",
+                quality=75,
+            )
+        else:
+            object_key = getattr(storage_obj, 'object_key', None)
+            if not object_key:
+                raise FileNotFoundError(
+                    f"No local object key for storage object {storage_obj.id}"
+                )
+            file_path = generic_storage.absolute_path_for_key(object_key, tenant_id)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File missing from storage: {file_path}")
 
-        with open(file_path, "rb") as f:
-            data = f.read()
+            with open(file_path, "rb") as f:
+                data = f.read()
 
         # Run AI analysis (respect pipeline config if present)
         from ai_analysis.service import analyze_content
         cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
         analysis_result = await analyze_content(
             data,
-            storage_obj.mime_type,
+            mime_type,
             context=None,
             vision_mode=cfg.get("vision_mode", "auto"),
             ai_tasks_str=cfg.get("ai_tasks"),
@@ -436,25 +451,40 @@ class AsyncPipelineManager:
         self._log(f"Task {task_info.task_id}: Running AI analysis")
 
         # Load file from storage
-        from storage.service import generic_storage
+        from storage.service import generic_storage, load_image_bytes_for_analysis
         tenant_id = getattr(storage_obj, 'tenant_id', None)
         if not tenant_id:
             meta = getattr(storage_obj, 'metadata_json', None) or {}
             tenant_id = meta.get('tenant_id')
         tenant_id = tenant_id or 'arkturian'
-        file_path = generic_storage.absolute_path_for_key(storage_obj.object_key, tenant_id)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File missing from storage: {file_path}")
+        mime_type = (storage_obj.mime_type or "")
+        if mime_type.lower().startswith("image/"):
+            data, mime_type = await load_image_bytes_for_analysis(
+                storage_obj,
+                tenant_id,
+                max_edge=1300,
+                target_format="webp",
+                quality=75,
+            )
+        else:
+            object_key = getattr(storage_obj, 'object_key', None)
+            if not object_key:
+                raise FileNotFoundError(
+                    f"No local object key for storage object {storage_obj.id}"
+                )
+            file_path = generic_storage.absolute_path_for_key(object_key, tenant_id)
+            if not file_path.exists():
+                raise FileNotFoundError(f"File missing from storage: {file_path}")
 
-        with open(file_path, "rb") as f:
-            data = f.read()
+            with open(file_path, "rb") as f:
+                data = f.read()
 
         # Run AI analysis (respect pipeline config if present)
         from ai_analysis.service import analyze_content
         cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
         analysis_result = await analyze_content(
             data,
-            storage_obj.mime_type,
+            mime_type,
             context=None,
             vision_mode=cfg.get("vision_mode", "auto"),
             ai_tasks_str=cfg.get("ai_tasks"),
