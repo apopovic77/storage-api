@@ -96,6 +96,38 @@ class AsyncPipelineManager:
         self.log_file = "/tmp/async_pipeline.log"
         self._log("AsyncPipelineManager initialized (database-backed)")
 
+    @staticmethod
+    def _summarize_kg_result(kg_result: Optional[Dict[str, Any] | Any]) -> Optional[Dict[str, Any]]:
+        """Convert KG pipeline result to a JSON-safe summary."""
+        if not kg_result:
+            return None
+
+        summary: Dict[str, Any] = {}
+
+        try:
+            summary["storage_object_id"] = getattr(kg_result, "storage_object_id", None)
+        except Exception:
+            summary["storage_object_id"] = None
+
+        try:
+            if hasattr(kg_result, "to_dict"):
+                dict_payload = kg_result.to_dict()
+                summary.update({k: v for k, v in dict_payload.items() if k not in summary})
+            else:
+                embedding = getattr(kg_result, "embedding", None)
+                if embedding is not None:
+                    summary["embedding_text_len"] = len(getattr(embedding, "embedding_text", "") or "")
+                    summary["metadata_keys"] = list((getattr(embedding, "metadata", {}) or {}).keys())
+        except Exception:
+            pass
+
+        # Fallback: if kg_result is already dict-like, merge shallow copy
+        if isinstance(kg_result, dict):
+            summary.update(kg_result)
+
+        # Remove None values so JSON stays clean
+        return {k: v for k, v in summary.items() if v not in (None, "")}
+
     def _log(self, message: str):
         """Write log message to file"""
         try:
@@ -298,6 +330,7 @@ class AsyncPipelineManager:
             task_info.completed_at = datetime.utcnow().isoformat()
             task_info.error = str(e)
             task_info.progress = 0
+            task_info.result = {"error": str(e)}
             self._save_task(task_info, db)
 
             error_trace = traceback.format_exc()
@@ -417,10 +450,17 @@ class AsyncPipelineManager:
             StorageObject.link_id == str(storage_obj.id)
         ).count() if kg_result else 0
 
+        kg_summary = self._summarize_kg_result(kg_result)
+        embeddings_created = 0
+        if isinstance(kg_result, dict):
+            embeddings_created = kg_result.get("embeddings_created", 0)
+        elif kg_result is not None:
+            embeddings_created = 1
+
         return {
             "mode": "fast",
-            "kg_result": kg_result,
-            "embeddings_created": kg_result.get("embeddings_created", 0) if kg_result and isinstance(kg_result, dict) else 0,
+            "kg_result": kg_summary,
+            "embeddings_created": embeddings_created,
             "external_objects_created": external_objects
         }
 
@@ -544,10 +584,17 @@ class AsyncPipelineManager:
             StorageObject.link_id == str(storage_obj.id)
         ).count() if kg_result else 0
 
+        kg_summary = self._summarize_kg_result(kg_result)
+        embeddings_created = 0
+        if isinstance(kg_result, dict):
+            embeddings_created = kg_result.get("embeddings_created", 0)
+        elif kg_result is not None:
+            embeddings_created = 1
+
         return {
             "mode": "quality",
-            "kg_result": kg_result,
-            "embeddings_created": kg_result.get("embeddings_created", 0) if kg_result and isinstance(kg_result, dict) else 0,
+            "kg_result": kg_summary,
+            "embeddings_created": embeddings_created,
             "external_objects_created": external_objects
         }
 
