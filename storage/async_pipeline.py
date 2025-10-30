@@ -18,6 +18,7 @@ from dataclasses import dataclass, asdict
 
 from sqlalchemy.orm import Session
 from models import StorageObject, AsyncTask
+from datetime import datetime
 
 
 class TaskStatus(str, Enum):
@@ -108,6 +109,21 @@ class AsyncPipelineManager:
     def _save_task(self, task_info: TaskInfo, db: Session):
         """Save or update task in database"""
         try:
+            # Normalize timestamp fields for SQLAlchemy (expect datetime objects)
+            def _to_dt(val):
+                if val is None:
+                    return None
+                if isinstance(val, datetime):
+                    return val
+                try:
+                    return datetime.fromisoformat(val)
+                except Exception:
+                    return None
+
+            created_dt = _to_dt(task_info.created_at) or datetime.utcnow()
+            started_dt = _to_dt(task_info.started_at)
+            completed_dt = _to_dt(task_info.completed_at)
+
             # Check if task already exists
             existing = db.query(AsyncTask).filter(AsyncTask.task_id == task_info.task_id).first()
 
@@ -117,8 +133,8 @@ class AsyncPipelineManager:
                 existing.mode = task_info.mode.value if isinstance(task_info.mode, Enum) else task_info.mode
                 existing.current_phase = task_info.current_phase.value if isinstance(task_info.current_phase, Enum) else task_info.current_phase
                 existing.progress = task_info.progress
-                existing.started_at = task_info.started_at
-                existing.completed_at = task_info.completed_at
+                existing.started_at = started_dt
+                existing.completed_at = completed_dt
                 existing.error = task_info.error
                 existing.result = json.dumps(task_info.result) if task_info.result else None
             else:
@@ -130,9 +146,9 @@ class AsyncPipelineManager:
                     mode=task_info.mode.value if isinstance(task_info.mode, Enum) else task_info.mode,
                     current_phase=task_info.current_phase.value if isinstance(task_info.current_phase, Enum) and task_info.current_phase else None,
                     progress=task_info.progress,
-                    created_at=task_info.created_at,
-                    started_at=task_info.started_at,
-                    completed_at=task_info.completed_at,
+                    created_at=created_dt,
+                    started_at=started_dt,
+                    completed_at=completed_dt,
                     error=task_info.error,
                     result=json.dumps(task_info.result) if task_info.result else None
                 )
@@ -172,7 +188,10 @@ class AsyncPipelineManager:
         self,
         object_id: int,
         mode: str = "quality",
-        db: Session = None
+        db: Session = None,
+        ai_tasks_str: Optional[str] = None,
+        vision_mode: Optional[str] = None,
+        context_role: Optional[str] = None
     ) -> str:
         """
         Start a new async processing task.
@@ -198,7 +217,14 @@ class AsyncPipelineManager:
             task_id=task_id,
             object_id=object_id,
             status=TaskStatus.QUEUED,
-            mode=analysis_mode
+            mode=analysis_mode,
+            result={
+                "config": {
+                    "ai_tasks": ai_tasks_str,
+                    "vision_mode": vision_mode or "auto",
+                    "context_role": context_role,
+                }
+            }
         )
 
         # Save to database
@@ -309,9 +335,17 @@ class AsyncPipelineManager:
         with open(file_path, "rb") as f:
             data = f.read()
 
-        # Run AI analysis
+        # Run AI analysis (respect pipeline config if present)
         from ai_analysis.service import analyze_content
-        analysis_result = await analyze_content(data, storage_obj.mime_type, context=None)
+        cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
+        analysis_result = await analyze_content(
+            data,
+            storage_obj.mime_type,
+            context=None,
+            vision_mode=cfg.get("vision_mode", "auto"),
+            ai_tasks_str=cfg.get("ai_tasks"),
+            context_role=cfg.get("context_role")
+        )
 
         # Save AI analysis results to database (like sync route does)
         storage_obj.ai_category = analysis_result.get("category")
@@ -402,9 +436,17 @@ class AsyncPipelineManager:
         with open(file_path, "rb") as f:
             data = f.read()
 
-        # Run AI analysis
+        # Run AI analysis (respect pipeline config if present)
         from ai_analysis.service import analyze_content
-        analysis_result = await analyze_content(data, storage_obj.mime_type, context=None)
+        cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
+        analysis_result = await analyze_content(
+            data,
+            storage_obj.mime_type,
+            context=None,
+            vision_mode=cfg.get("vision_mode", "auto"),
+            ai_tasks_str=cfg.get("ai_tasks"),
+            context_role=cfg.get("context_role")
+        )
 
         # Save AI analysis results to database (like sync route does)
         storage_obj.ai_category = analysis_result.get("category")

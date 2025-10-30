@@ -24,8 +24,9 @@ from ai_analysis.prompts import (
 import asyncio
 
 # API configuration
-INTERNAL_API_KEY = "Inetpass1"
-API_BASE_URL = "http://127.0.0.1:8003"  # AI-API Service (correct port)
+INTERNAL_API_KEY = os.getenv("AI_INTERNAL_API_KEY", "Inetpass1")
+# Make AI API base configurable to avoid hardcoding wrong ports on prod
+API_BASE_URL = os.getenv("AI_API_BASE_URL", "http://127.0.0.1:8000")
 
 # CSV Chunking configuration
 CSV_CHUNK_SIZE = 10  # Process 10 rows per chunk (small for testing/debugging)
@@ -454,7 +455,8 @@ async def _analyze_csv_chunked(
 
 async def _analyze_vision_comprehensive(
     data: bytes,
-    context: Optional[Dict[str, Any]] = None
+    context: Optional[Dict[str, Any]] = None,
+    vision_mode: str = "generic"
 ) -> Dict[str, Any]:
     """
     VISION MODE: Comprehensive image analysis with product detection and visual intelligence.
@@ -509,6 +511,9 @@ async def _analyze_vision_comprehensive(
             media_analysis = analysis_result.get("mediaAnalysis", {})
             embedding_info = analysis_result.get("embeddingInfo", {})
 
+            # Optional annotations if model returns them (planned extension)
+            annotations = analysis_result.get("annotations") or []
+
             # Merge all visual intelligence into embedding metadata
             if "metadata" not in embedding_info:
                 embedding_info["metadata"] = {}
@@ -519,8 +524,13 @@ async def _analyze_vision_comprehensive(
                 "layout_intelligence": layout_intelligence,
                 "semantic_properties": semantic_props,
                 "technical_metadata": tech_metadata,
-                "is_product": classification.get("isProduct", False)
+                "is_product": classification.get("isProduct", False),
+                "vision_mode": vision_mode
             })
+
+            # Ensure annotations key exists for product mode
+            if vision_mode == "product" and "annotations" not in embedding_info["metadata"]:
+                embedding_info["metadata"]["annotations"] = annotations if isinstance(annotations, list) else []
 
             # Build comprehensive extracted_tags
             extracted_tags = {
@@ -563,7 +573,10 @@ async def analyze_content(
     data: bytes,
     mime_type: str,
     context: Optional[Dict[str, Any]] = None,
-    object_id: Optional[int] = None
+    object_id: Optional[int] = None,
+    vision_mode: str = "auto",
+    ai_tasks_str: Optional[str] = None,
+    context_role: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Analyze content using AI.
@@ -584,8 +597,12 @@ async def analyze_content(
     """
     # Use comprehensive vision analysis for images
     if mime_type.startswith("image/"):
-        print(f"🎨 Detected image upload - using comprehensive vision analysis", flush=True)
-        return await _analyze_vision_comprehensive(data, context)
+        # Determine effective vision mode
+        eff_mode = vision_mode or "auto"
+        if eff_mode == "auto":
+            eff_mode = "product" if (context_role == "product") else "generic"
+        print(f"🎨 Detected image upload - using vision analysis mode={eff_mode}", flush=True)
+        return await _analyze_vision_comprehensive(data, context, vision_mode=eff_mode)
 
     # For non-images, use existing modes
     if ai_config.is_split():

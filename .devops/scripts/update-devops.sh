@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-REPO_ROOT="/Volumes/DatenAP/Code/storage-api"
+REPO_ROOT="{{REPO_ROOT}}"
 CONFIG_FILE="$REPO_ROOT/.devops/starter-config.json"
-DEFAULT_STARTER_PATH="/Volumes/DatenAP/Code/github-starterpack"
+DEFAULT_STARTER_PATH="{{STARTER_PATH}}"
 
 usage() {
   cat <<'USAGE'

@@ -437,21 +437,34 @@ class KnowledgeGraphPipeline:
                 pass
             return []
 
-    def get_stats(self) -> dict:
+    def get_stats(self, tenant_id: Optional[str] = None) -> dict:
         """
-        Get knowledge graph statistics.
+        Get knowledge graph statistics for a specific tenant.
+
+        Args:
+            tenant_id: Optional tenant identifier. If provided, returns stats for
+                      tenant-specific collection. If None, uses legacy default collection.
 
         Returns:
             Dictionary with stats:
             {
                 "total_embeddings": 123,
-                "collection": "arkturian_knowledge"
+                "collection": "tenant_oneal_knowledge" (or "arkturian_knowledge" for legacy)
             }
         """
-        return {
-            "total_embeddings": self.vector_store.count(),
-            "collection": self.vector_store.collection_name
-        }
+        # Get tenant-specific vector store if tenant_id provided
+        if tenant_id:
+            tenant_vector_store = get_vector_store(tenant_id=tenant_id)
+            return {
+                "total_embeddings": tenant_vector_store.count(),
+                "collection": tenant_vector_store.collection_name
+            }
+        else:
+            # Legacy: use default vector store for backward compatibility
+            return {
+                "total_embeddings": self.vector_store.count(),
+                "collection": self.vector_store.collection_name
+            }
 
     async def process_image_uris(
         self,

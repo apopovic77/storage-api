@@ -1,157 +1,110 @@
-name: Build & Deploy
+name: Deploy Storage API
 
 on:
   push:
     branches:
+      - dev          # Auto-deploy to staging (arkturian.com)
+      - main         # Manual deploy to production
+  pull_request:
+    branches:
       - main
-  workflow_dispatch:
+      - dev
+
+env:
+  PYTHON_VERSION: "3.11"
 
 jobs:
-  build-and-deploy:
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
 
-      - name: Build application
-        run: echo 'No build needed for FastAPI'
+      - name: Run tests
+        run: |
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
 
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1.0.3
+  deploy-staging:
+    name: Deploy to Staging (arkturian.com)
+    needs: test
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://api-storage.arkturian.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy to Staging Server
+        uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
-            set -e
-
-            REPO_URL="https://github.com/apopovic77/storage-api.git"
-            REPO_PATH="/opt/repos/storage-api"
-            DEPLOY_PATH="/var/www/api-storage.arkturian.com"
-            BACKUP_DIR="/var/backups"
-            BACKUP_PREFIX="storage-api"
-            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-            BACKUP_PATH="$BACKUP_DIR/${BACKUP_PREFIX}-${TIMESTAMP}"
-
-            # Clone or update repo
-            if [ ! -d "$REPO_PATH" ]; then
-              echo "Cloning repository..."
-              mkdir -p /opt/repos
-              git clone "$REPO_URL" "$REPO_PATH"
-            fi
-
-            cd "$REPO_PATH"
-            git fetch origin main
-            git reset --hard origin/main
-
-            # Create backup
-            if [ -d "$DEPLOY_PATH" ]; then
-              echo "Creating backup..."
-              mkdir -p "$BACKUP_DIR"
-              cp -r "$DEPLOY_PATH" "$BACKUP_PATH"
-              echo "Backup saved to: $BACKUP_PATH"
-            fi
-
-            # Deploy
-            echo "Deploying FastAPI application..."
-            mkdir -p "$DEPLOY_PATH"
-            rsync -av --delete \
-              --exclude='.git' \
-              --exclude='__pycache__' \
-              --exclude='*.pyc' \
-              --exclude='.env' \
-              --exclude='venv' \
-              --exclude='storage.db' \
-              --exclude='chroma_db' \
-              "$REPO_PATH/" "$DEPLOY_PATH/"
-
-            # Install dependencies in deployment directory
-            cd "$DEPLOY_PATH"
+            echo "🚀 Deploying to staging..."
+            cd /var/www/api-storage.arkturian.com
+            git fetch origin
+            git checkout dev
+            git pull origin dev
             /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            systemctl restart storage-api.service
+            sleep 5
+            systemctl status storage-api.service --no-pager
 
-            # Set permissions
-            chown -R www-data:www-data "$DEPLOY_PATH"
-            chmod -R 755 "$DEPLOY_PATH"
+      - name: Health Check
+        run: |
+          sleep 10
+          curl -f https://api-storage.arkturian.com/health || exit 1
 
-            # Database Backup (IMPORTANT: DB is in DEPLOY_PATH, NOT /var/lib!)
-            DB_PATH="$DEPLOY_PATH/storage.db"
-            DB_BACKUP="/var/backups/storage-db-${TIMESTAMP}.db"
-
-            if [ -f "$DB_PATH" ]; then
-              echo "📦 Backing up database..."
-              cp "$DB_PATH" "$DB_BACKUP"
-              echo "✅ Database backed up to: $DB_BACKUP"
-            fi
-
-            # Run Alembic migrations (if alembic directory exists)
-            if [ -d "alembic" ]; then
-              echo "🔄 Running database migrations..."
-              /root/.pyenv/versions/3.11.9/bin/alembic upgrade head || {
-                echo "❌ Migration failed! Restoring backup..."
-                cp "$DB_BACKUP" "$DB_PATH"
-                exit 1
-              }
-              echo "✅ Migrations completed successfully"
-            else
-              echo "⚠️  No alembic migrations found (skipping)"
-            fi
-
-            # Restart service
-            echo "Restarting storage-api service..."
-            systemctl restart storage-api
-
-            echo "✅ Deployment completed successfully!"
-            systemctl status storage-api --no-pager -l
-
-      - name: Notify on success
-        if: success()
-        run: echo "✅ Deployment successful for commit ${{ github.sha }}"
-
-      - name: Notify on failure
-        if: failure()
-        run: echo "❌ Deployment failed for commit ${{ github.sha }}"
-
-  trigger-sdk-regeneration:
-    needs: build-and-deploy
+  deploy-production:
+    name: Deploy to Production
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
-    if: success()
+    environment:
+      name: production
 
     steps:
-      - name: Trigger TypeScript SDK regeneration
-        uses: peter-evans/repository-dispatch@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: apopovic77/storage-api-typescript-sdk
-          event-type: openapi-updated
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Trigger C# SDK regeneration
-        uses: peter-evans/repository-dispatch@v2
+      - name: Deploy to Production Servers
+        uses: appleboy/ssh-action@master
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: apopovic77/storage-api-csharp-sdk
-          event-type: openapi-updated
-
-  trigger-e2e-tests:
-    needs: build-and-deploy
-    runs-on: ubuntu-latest
-    if: success()
-
-    steps:
-      - name: Trigger E2E tests
-        uses: peter-evans/repository-dispatch@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: apopovic77/api-e2e-tests
-          event-type: storage-api-deployed
-          client-payload: '{"api": "storage", "sha": "${{ github.sha }}"}'
+          host: ${{ secrets.PRODUCTION_HOSTS }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            echo "🚀 Deploying to production..."
+            cd /var/www/api-storage
+            git fetch origin
+            git checkout main
+            git pull origin main
+            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            systemctl restart storage-api.service
+            sleep 5
+            systemctl status storage-api.service --no-pager

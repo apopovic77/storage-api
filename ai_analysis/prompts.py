@@ -493,7 +493,17 @@ ANTWORT FORMAT (JSON):
       "issues": [],
       "recommendation": "auto_embed"
     }}
-  }}
+  }},
+  "annotations": [
+    {{
+      "label": "string",
+      "type": "feature|logo|zipper|material|vent|price|title|other",
+      "anchor": {{"x": number (0..1), "y": number (0..1)}},
+      "box": [number (0..1), number (0..1), number (0..1), number (0..1)],
+      "confidence": number (0.0-1.0),
+      "source": "vision-llm"
+    }}
+  ]
 }}
 """
 

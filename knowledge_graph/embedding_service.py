@@ -48,58 +48,106 @@ class EmbeddingService:
         Combine all semantic information from a StorageObject into embeddable text.
 
         This combines:
-        - AI category
-        - AI extracted tags
-        - Context text
-        - Collection/link IDs
+        - AI-generated embedding text (if available - PRIORITY)
+        - Visual and semantic properties for style/vibe-based search
+        - AI category, tags, title, description
+        - Context text and organizational metadata
 
         Args:
             storage_obj: Storage object with AI-analyzed data
 
         Returns:
-            Combined text suitable for embedding
+            Combined text suitable for semantic embedding
         """
+
+        # PRIORITY: Use AI-generated embedding text if available
+        if storage_obj.ai_context_metadata:
+            embedding_info = storage_obj.ai_context_metadata.get("embedding_info", {})
+            ai_embedding_text = embedding_info.get("embeddingText")
+
+            # If AI already generated rich embedding text, use it!
+            if ai_embedding_text and len(ai_embedding_text.strip()) > 100:
+                return ai_embedding_text
+
+        # FALLBACK: Build rich embedding text from available metadata
         parts = []
+
+        # Title and description first (most important)
+        if storage_obj.ai_title or storage_obj.title:
+            title = storage_obj.ai_title or storage_obj.title
+            parts.append(f"{title}")
+
+        if storage_obj.ai_subtitle or storage_obj.description:
+            subtitle = storage_obj.ai_subtitle or storage_obj.description
+            parts.append(f"{subtitle}")
+
+        # Extract rich semantic properties from AI metadata
+        if storage_obj.ai_context_metadata:
+            metadata = storage_obj.ai_context_metadata
+
+            # Product Analysis (style, mood, target audience)
+            product_analysis = metadata.get("product_analysis", {})
+            if product_analysis:
+                style = product_analysis.get("style")
+                if style:
+                    parts.append(f"Style: {style}")
+
+                target = product_analysis.get("targetAudience", {})
+                if isinstance(target, dict):
+                    audience_parts = []
+                    if target.get("demographics"):
+                        audience_parts.append(target["demographics"])
+                    if target.get("interests"):
+                        audience_parts.append(target["interests"])
+                    if audience_parts:
+                        parts.append(f"For: {' - '.join(audience_parts)}")
+
+            # Visual Analysis (mood, aesthetic style)
+            visual_analysis = metadata.get("visual_analysis", {})
+            if visual_analysis:
+                aesthetics = visual_analysis.get("aesthetics", {})
+                if aesthetics:
+                    mood = aesthetics.get("mood")
+                    aesthetic_style = aesthetics.get("aestheticStyle")
+                    if mood:
+                        parts.append(f"Mood: {mood}")
+                    if aesthetic_style:
+                        parts.append(f"Aesthetic: {aesthetic_style}")
+
+            # Layout Intelligence (visual harmony tags for style matching)
+            layout = metadata.get("layout_intelligence", {})
+            if layout:
+                harmony_tags = layout.get("visualHarmonyTags", [])
+                if harmony_tags:
+                    # Convert to readable text
+                    readable_tags = [tag.replace("_", " ") for tag in harmony_tags[:3]]
+                    parts.append(f"Visual theme: {', '.join(readable_tags)}")
+
+            # Semantic Properties (keywords, emotional appeal)
+            semantic = metadata.get("semantic_properties", {})
+            if semantic:
+                emotional = semantic.get("emotionalAppeal", [])
+                if emotional and isinstance(emotional, list):
+                    parts.append(f"Emotional appeal: {', '.join(emotional[:5])}")
+
+                brand_perception = semantic.get("brandPerception")
+                if brand_perception:
+                    parts.append(f"Brand feel: {brand_perception}")
 
         # Category
         if storage_obj.ai_category:
             parts.append(f"Category: {storage_obj.ai_category}")
 
-        # Extracted tags (from AI analysis)
-        if storage_obj.ai_tags:
-            if isinstance(storage_obj.ai_tags, list):
-                # ai_tags is a list of strings (new format)
-                parts.append(f"Tags: {', '.join(str(t) for t in storage_obj.ai_tags)}")
-            elif isinstance(storage_obj.ai_tags, dict):
-                # ai_tags is a dict (legacy format)
-                for key, value in storage_obj.ai_tags.items():
-                    if value:
-                        if isinstance(value, list):
-                            parts.append(f"{key}: {', '.join(str(v) for v in value)}")
-                        else:
-                            parts.append(f"{key}: {value}")
+        # AI Tags (semantic keywords)
+        if storage_obj.ai_tags and isinstance(storage_obj.ai_tags, list):
+            tags = [str(t) for t in storage_obj.ai_tags[:10]]  # Limit to top 10
+            parts.append(f"Keywords: {', '.join(tags)}")
 
-        # Context text (if available)
-        if storage_obj.ai_context_metadata:
-            ctx = storage_obj.ai_context_metadata.get("context_text")
-            if ctx:
-                parts.append(f"Description: {ctx}")
+        # Collections (product lines, themes)
+        if storage_obj.ai_collections and isinstance(storage_obj.ai_collections, list):
+            parts.append(f"Collections: {', '.join(storage_obj.ai_collections[:3])}")
 
-        # Collection and link IDs (provide context about organization)
-        if storage_obj.collection_id:
-            parts.append(f"Collection: {storage_obj.collection_id}")
-
-        if storage_obj.link_id:
-            parts.append(f"Link ID: {storage_obj.link_id}")
-
-        # Title and description (if available)
-        if storage_obj.title:
-            parts.append(f"Title: {storage_obj.title}")
-
-        if storage_obj.description:
-            parts.append(f"Description: {storage_obj.description}")
-
-        return "\n".join(parts)
+        return ". ".join(parts) if parts else ""
 
 
 # Global service instance

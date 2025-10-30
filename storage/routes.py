@@ -1056,6 +1056,9 @@ async def upload_file(
     ai_file_path: Optional[str] = Form(None),  # Original file path for AI context (e.g., "/OnEal/2026/Helmets/file.jpg")
     ai_metadata: Optional[str] = Form(None),  # JSON string with semantic metadata for AI (brand, year, category, etc.)
     ai_context_text: Optional[str] = Form(None),  # Unstructured text for AI to parse and extract semantic tags
+    ai_tasks: Optional[str] = Form(None),  # CSV/JSON list of steps: safety,vision,product,embedding,kg,notify
+    ai_vision_mode: Optional[str] = Form(None),  # auto|generic|product
+    ai_context_role: Optional[str] = Form(None),  # product|lifestyle|doc|other
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
@@ -1526,6 +1529,10 @@ async def fetch_and_store_remote(
 async def analyze_existing_object(
     object_id: int,
     ai_context_text: Optional[str] = Query(None, description="Optional context hint for AI"),
+    ai_tasks: Optional[str] = Query(None, description="CSV/JSON list: safety,vision,product,embedding,kg,notify"),
+    ai_vision_mode: Optional[str] = Query(None, description="auto|generic|product"),
+    ai_context_role: Optional[str] = Query(None, description="product|lifestyle|doc|other"),
+    ai_metadata: Optional[str] = Query(None, description="JSON with domain metadata (e.g., brand, model, features)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     tenant_id: str = Depends(get_tenant_id),
@@ -1551,8 +1558,24 @@ async def analyze_existing_object(
         ai_context = None
         if ai_context_text:
             ai_context = {"context_text": ai_context_text}
+        if ai_metadata:
+            try:
+                import json as _json
+                meta = _json.loads(ai_metadata)
+                if ai_context is None:
+                    ai_context = {}
+                ai_context["metadata"] = meta
+            except Exception:
+                pass
 
-        analysis_result = await analyze_content(data, obj.mime_type, context=ai_context)
+        analysis_result = await analyze_content(
+            data,
+            obj.mime_type,
+            context=ai_context,
+            vision_mode=ai_vision_mode or "auto",
+            ai_tasks_str=ai_tasks,
+            context_role=ai_context_role,
+        )
 
         # Save comprehensive AI analysis results
         obj.ai_category = analysis_result.get("category")
@@ -2925,6 +2948,9 @@ async def admin_trigger_processing(
 async def analyze_async(
     object_id: int,
     mode: str = "quality",  # "fast" or "quality"
+    ai_tasks: Optional[str] = Query(None, description="CSV/JSON list: safety,vision,product,embedding,kg,notify"),
+    ai_vision_mode: Optional[str] = Query(None, description="auto|generic|product"),
+    ai_context_role: Optional[str] = Query(None, description="product|lifestyle|doc|other"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
@@ -2959,7 +2985,10 @@ async def analyze_async(
     task_id = await pipeline_manager.start_task(
         object_id=object_id,
         mode=mode,
-        db=db
+        db=db,
+        ai_tasks_str=ai_tasks,
+        vision_mode=ai_vision_mode,
+        context_role=ai_context_role,
     )
 
     return {
@@ -3053,6 +3082,42 @@ async def get_embedding_text(
         "embedding_text": embedding_text,
         "searchable_fields": searchable_fields,
         "char_count": len(embedding_text)
+    }
+
+
+@router.get("/objects/{object_id}/annotations")
+async def get_object_annotations(
+    object_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_tenant_id)
+):
+    """Return product annotations (anchor points) for an object if available."""
+    obj = db.query(StorageObject).filter(
+        StorageObject.id == object_id,
+        StorageObject.tenant_id == tenant_id
+    ).first()
+
+    if not obj:
+        raise HTTPException(status_code=404, detail="Object not found")
+
+    if obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    metadata = obj.ai_context_metadata or {}
+    embedding_info = metadata.get("embedding_info", {}) or {}
+    meta = embedding_info.get("metadata", {}) or {}
+
+    annotations = meta.get("annotations", [])
+    image_space = meta.get("imageSpace", "relative")
+    vision_mode = meta.get("vision_mode", None)
+
+    return {
+        "object_id": object_id,
+        "annotations": annotations,
+        "imageSpace": image_space,
+        "vision_mode": vision_mode,
+        "updated_at": obj.updated_at.isoformat() if obj.updated_at else None
     }
 
 

@@ -2,9 +2,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="/Volumes/DatenAP/Code/storage-api"
-DEV_BRANCH="dev"
-MAIN_BRANCH="main"
+source "$(dirname "$0")/common.sh"
 CHECKOUT_SCRIPT="$(dirname "$0")/checkout-branch.sh"
 BUILD_SCRIPT="$(dirname "$0")/build-local.sh"
 
@@ -12,7 +10,7 @@ usage() {
   cat <<'USAGE'
 Usage: release.sh [--no-build]
 
-Fast-forwards main from dev, pushes to origin, and
+Fast-forwards {{MAIN_BRANCH}} from {{DEV_BRANCH}}, pushes to origin, and
 triggers the GitHub Actions deployment workflow. By default the local build
 script runs beforehand.
 
@@ -43,19 +41,9 @@ done
 
 cd "$REPO_ROOT"
 
-# Check for uncommitted changes and auto-commit them
 if [[ -n "$(git status --porcelain)" ]]; then
-  printf '\n==> Auto-committing changes for release\n'
-  
-  # Generate informative commit message
-  changed_files=$(git status --porcelain | wc -l | xargs)
-  timestamp=$(date '+%Y-%m-%d %H:%M')
-  commit_msg="Release preparation - ${changed_files} files updated [${timestamp}]"
-  
-  git add -A
-  git commit -m "$commit_msg"
-  
-  echo "✅ Auto-committed: $commit_msg"
+  echo "Error: working tree has uncommitted changes. Please commit or stash them first." >&2
+  exit 1
 fi
 
 printf '\n==> Syncing %s branch\n' "$DEV_BRANCH"
@@ -73,26 +61,8 @@ printf '\n==> Syncing %s branch\n' "$MAIN_BRANCH"
 
 printf '\n==> Fast-forwarding %s from %s\n' "$MAIN_BRANCH" "$DEV_BRANCH"
 if ! git merge --ff-only "$DEV_BRANCH"; then
-  echo "⚠️  Cannot fast-forward - branches have diverged."
-  echo "🔄 Auto-syncing: merging $MAIN_BRANCH into $DEV_BRANCH first..."
-  
-  # Switch back to dev and merge main
-  "$CHECKOUT_SCRIPT" "$DEV_BRANCH"
-  git merge "$MAIN_BRANCH" -m "Auto-sync: Merge $MAIN_BRANCH into $DEV_BRANCH before release"
-  
-  echo "✅ Branches synced. Pushing $DEV_BRANCH..."
-  git push origin "$DEV_BRANCH"
-  
-  # Now switch to main and try fast-forward again
-  "$CHECKOUT_SCRIPT" "$MAIN_BRANCH"
-  echo "🔄 Retrying fast-forward..."
-  
-  if ! git merge --ff-only "$DEV_BRANCH"; then
-    echo "❌ Error: Still cannot fast-forward after sync. Manual intervention needed." >&2
-    exit 1
-  fi
-  
-  echo "✅ Fast-forward successful after sync!"
+  echo "Error: $MAIN_BRANCH cannot fast-forward from $DEV_BRANCH. Resolve manually (likely $MAIN_BRANCH is ahead)." >&2
+  exit 1
 fi
 
 git push origin "$MAIN_BRANCH"

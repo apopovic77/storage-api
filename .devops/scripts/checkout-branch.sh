@@ -2,9 +2,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="/Volumes/DatenAP/Code/storage-api"
-DEV_BRANCH="dev"
-MAIN_BRANCH="main"
+source "$(dirname "$0")/common.sh"
 
 usage() {
   cat <<'USAGE'
@@ -13,8 +11,8 @@ Usage: checkout-branch.sh <branch>
 Switches the working tree to the requested branch and fast-forwards it from origin.
 
 Examples:
-  checkout-branch.sh dev
-  checkout-branch.sh main
+  checkout-branch.sh {{DEV_BRANCH}}
+  checkout-branch.sh {{MAIN_BRANCH}}
 USAGE
 }
 

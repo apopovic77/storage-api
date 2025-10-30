@@ -2,8 +2,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="/Volumes/DatenAP/Code/storage-api"
-BUILD_COMMAND="echo 'No build needed for FastAPI'"
+source "$(dirname "$0")/common.sh"
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +31,10 @@ if [[ "$clean_flag" == true && -d dist ]]; then
 fi
 
 # shellcheck disable=SC2086
-$BUILD_COMMAND
+if [[ "$BUILD_COMMAND" == ":" ]]; then
+  echo "No build command configured (BUILD_COMMAND). Skipping local build."
+else
+  $BUILD_COMMAND
+fi
 
 echo "✅ Local build finished. Output: ${REPO_ROOT}/dist"
