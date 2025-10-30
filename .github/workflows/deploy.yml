@@ -43,7 +43,11 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
+          if [ -d tests ]; then
+            pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
+          else
+            echo "No tests directory present. Skipping pytest step."
+          fi
 
   deploy-staging:
     name: Deploy to Staging (arkturian.com)

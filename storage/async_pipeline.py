@@ -328,7 +328,12 @@ class AsyncPipelineManager:
 
         # Load file from storage
         from storage.service import generic_storage
-        file_path = generic_storage.absolute_path_for_key(storage_obj.object_key)
+        tenant_id = getattr(storage_obj, 'tenant_id', None)
+        if not tenant_id:
+            meta = getattr(storage_obj, 'metadata_json', None) or {}
+            tenant_id = meta.get('tenant_id')
+        tenant_id = tenant_id or 'arkturian'
+        file_path = generic_storage.absolute_path_for_key(storage_obj.object_key, tenant_id)
         if not file_path.exists():
             raise FileNotFoundError(f"File missing from storage: {file_path}")
 
@@ -346,6 +351,9 @@ class AsyncPipelineManager:
             ai_tasks_str=cfg.get("ai_tasks"),
             context_role=cfg.get("context_role")
         )
+
+        # Ensure object is attached to this session
+        storage_obj = db.merge(storage_obj)
 
         # Save AI analysis results to database (like sync route does)
         storage_obj.ai_category = analysis_result.get("category")
@@ -429,7 +437,12 @@ class AsyncPipelineManager:
 
         # Load file from storage
         from storage.service import generic_storage
-        file_path = generic_storage.absolute_path_for_key(storage_obj.object_key)
+        tenant_id = getattr(storage_obj, 'tenant_id', None)
+        if not tenant_id:
+            meta = getattr(storage_obj, 'metadata_json', None) or {}
+            tenant_id = meta.get('tenant_id')
+        tenant_id = tenant_id or 'arkturian'
+        file_path = generic_storage.absolute_path_for_key(storage_obj.object_key, tenant_id)
         if not file_path.exists():
             raise FileNotFoundError(f"File missing from storage: {file_path}")
 
@@ -447,6 +460,9 @@ class AsyncPipelineManager:
             ai_tasks_str=cfg.get("ai_tasks"),
             context_role=cfg.get("context_role")
         )
+
+        # Ensure object is attached to this session
+        storage_obj = db.merge(storage_obj)
 
         # Save AI analysis results to database (like sync route does)
         storage_obj.ai_category = analysis_result.get("category")
