@@ -52,7 +52,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging (arkturian.com)
     needs: test
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && secrets.STAGING_HOST != ''
     runs-on: ubuntu-latest
     environment:
       name: staging
@@ -87,7 +87,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.PRODUCTION_HOSTS != ''
     runs-on: ubuntu-latest
     environment:
       name: production
