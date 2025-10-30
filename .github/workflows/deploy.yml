@@ -52,27 +52,20 @@ jobs:
   deploy-staging:
     name: Deploy to Staging (arkturian.com)
     needs: test
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.ENABLE_STAGING_DEPLOY == 'true'
     runs-on: ubuntu-latest
     environment:
       name: staging
       url: https://api-storage.arkturian.com
-    env:
-      STAGING_HOST: ${{ secrets.STAGING_HOST }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Skip staging deploy (missing secrets)
-        if: env.STAGING_HOST == ''
-        run: echo "Skipping staging deploy: STAGING_HOST secret not configured."
-
       - name: Deploy to Staging Server
-        if: env.STAGING_HOST != ''
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ env.STAGING_HOST }}
+          host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
@@ -87,7 +80,6 @@ jobs:
             systemctl status storage-api.service --no-pager
 
       - name: Health Check
-        if: env.STAGING_HOST != ''
         run: |
           sleep 10
           curl -f https://api-storage.arkturian.com/health || exit 1
@@ -95,26 +87,19 @@ jobs:
   deploy-production:
     name: Deploy to Production
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
     runs-on: ubuntu-latest
     environment:
       name: production
-    env:
-      PRODUCTION_HOSTS: ${{ secrets.PRODUCTION_HOSTS }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Skip production deploy (missing secrets)
-        if: env.PRODUCTION_HOSTS == ''
-        run: echo "Skipping production deploy: PRODUCTION_HOSTS secret not configured."
-
       - name: Deploy to Production Servers
-        if: env.PRODUCTION_HOSTS != ''
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ env.PRODUCTION_HOSTS }}
+          host: ${{ secrets.PRODUCTION_HOSTS }}
           username: ${{ secrets.PRODUCTION_USER }}
           key: ${{ secrets.PRODUCTION_SSH_KEY }}
           script: |
