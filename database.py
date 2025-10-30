@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, MetaData, text, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from databases import Database
@@ -53,7 +54,15 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def create_tables():
     """Create all database tables"""
     from models import Base  # Import here to avoid circular dependency
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except OperationalError as exc:
+        message = str(exc).lower()
+        # Ignore concurrent creation attempts when tables already exist (SQLite multi-worker startup)
+        if "already exists" in message:
+            print(f"Info: Ignoring table creation race condition: {exc}")
+        else:
+            raise
 
 def get_db():
     """Database dependency for FastAPI"""
@@ -66,7 +75,14 @@ def get_db():
 async def connect_db():
     """Connect to database (for startup)"""
     await database.connect()
-    create_tables()
+    try:
+        create_tables()
+    except OperationalError as exc:
+        message = str(exc).lower()
+        if "already exists" in message:
+            print(f"Info: Ignoring table creation race condition during connect: {exc}")
+        else:
+            raise
 
     # Lightweight, idempotent migrations for SQLite deployments
     try:
