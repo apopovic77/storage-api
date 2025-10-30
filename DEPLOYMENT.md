@@ -1,36 +1,22 @@
 # 🚀 Deployment Guide - Storage API
 
-## ⚠️ KRITISCH: Upload-Verzeichnis Schutz
+## 📦 Persistente Daten
 
-### Aktuelle Konfiguration
-
-**Uploads-Location:** `/var/www/uploads/storage/` (AUSSERHALB Deploy-Path)
-**Deploy-Path:** `/var/www/api-storage.arkturian.com/`
+| Ressource              | Pfad                              | Hinweis                          |
+|------------------------|-----------------------------------|----------------------------------|
+| Deploy-Repo            | `/var/www/api-storage.arkturian.com` | Wird bei jedem Deploy gereinigt |
+| Application Data Dir   | `/var/lib/storage-api`            | SQLite-DB, WAL, Chroma           |
+| Uploads                | `/mnt/backup-disk/uploads/storage`| Unabhängig vom Repo              |
 
 ```bash
-# .env auf Server:
-STORAGE_UPLOAD_DIR=/var/www/uploads/storage
+# .env (Auszug)
+STORAGE_DATA_DIR=/var/lib/storage-api
+STORAGE_DATABASE_URL=sqlite:////var/lib/storage-api/storage.db
+CHROMA_DB_PATH=/var/lib/storage-api/chroma_db
+STORAGE_UPLOAD_DIR=/mnt/backup-disk/uploads/storage
 ```
 
-### ✅ Was ist geschützt:
-
-```yaml
-# .github/workflows/deploy.yml
-rsync --delete \
-  --exclude='storage.db'    # Datenbank
-  --exclude='chroma_db'     # Vector Embeddings
-  "$REPO/" "$DEPLOY_PATH/"
-```
-
-**WICHTIG:** Uploads liegen in `/var/www/uploads/` - **NICHT** im Deploy-Path!
-→ rsync kann sie NICHT löschen ✅
-
-### ❌ Was war früher falsch:
-
-```
-/var/www/api-storage.arkturian.com/uploads/  ← ALTE Location (IM Deploy-Path!)
-→ rsync --delete hat diese GELÖSCHT bei jedem Deploy
-```
+Die GitHub Action verschiebt bei Bedarf alte `.db`/`chroma_db`-Artefakte automatisch nach `/var/lib/storage-api`, führt anschließend `git clean -fdx -e .env` aus und sorgt damit für ein sauberes Working Directory ohne Datenverlust.
 
 ## 🔒 Deployment-Sicherheit
 
@@ -39,7 +25,7 @@ rsync --delete \
 ```bash
 # VOR jedem Deploy prüfen:
 ssh root@arkturian.com "
-  echo 'DB:' && ls -lh /var/www/api-storage.arkturian.com/storage.db
+echo 'DB:' && ls -lh /var/lib/storage-api/storage.db
   echo 'Uploads:' && du -sh /var/www/uploads/storage/
   echo 'ChromaDB:' && du -sh /var/www/api-storage.arkturian.com/chroma_db/
 "
@@ -49,7 +35,7 @@ ssh root@arkturian.com "
 
 ```bash
 # Automatisches Backup (bereits im Workflow):
-cp /var/www/api-storage.arkturian.com/storage.db \
+cp /var/lib/storage-api/storage.db \
    /var/backups/storage-db-$(date +%Y%m%d-%H%M%S).db
 ```
 
@@ -58,7 +44,7 @@ cp /var/www/api-storage.arkturian.com/storage.db \
 ```bash
 # DB restore:
 cp /var/backups/storage-db-TIMESTAMP.db \
-   /var/www/api-storage.arkturian.com/storage.db
+   /var/lib/storage-api/storage.db
 
 # Service restart:
 systemctl restart storage-api
@@ -71,7 +57,7 @@ systemctl restart storage-api
 ```bash
 # Nach jedem Deploy prüfen:
 echo "Uploads:" && find /var/www/uploads/storage -type f | wc -l
-echo "DB Objects:" && sqlite3 /var/www/api-storage.arkturian.com/storage.db \
+echo "DB Objects:" && sqlite3 /var/lib/storage-api/storage.db \
   "SELECT COUNT(*) FROM storage_objects;"
 ```
 
