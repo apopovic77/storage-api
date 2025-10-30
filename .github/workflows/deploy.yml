@@ -80,12 +80,8 @@ jobs:
             git config --global --add safe.directory "$TARGET_DIR"
             if [ ! -d .git ]; then
               git init
-              if git remote | grep -q '^origin$'; then
-                git remote set-url origin https://github.com/apopovic77/storage-api.git
-              else
-                git remote add origin https://github.com/apopovic77/storage-api.git
-              fi
             fi
+            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
             git fetch origin
             git checkout dev
             git reset --hard origin/dev
@@ -129,12 +125,8 @@ jobs:
             git config --global --add safe.directory "$TARGET_DIR"
             if [ ! -d .git ]; then
               git init
-              if git remote | grep -q '^origin$'; then
-                git remote set-url origin https://github.com/apopovic77/storage-api.git
-              else
-                git remote add origin https://github.com/apopovic77/storage-api.git
-              fi
             fi
+            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
             git fetch origin
             git checkout main
             git reset --hard origin/main
