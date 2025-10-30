@@ -138,7 +138,7 @@ async def find_similar_objects(
                 query_object_id=object_id,
                 similar_objects=[],
                 distances=[],
-                total_embeddings=kg_pipeline.get_stats()["total_embeddings"]
+                total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"]
             )
 
         # Fetch full storage objects for the similar results (with owner email)
@@ -186,7 +186,7 @@ async def find_similar_objects(
             query_object_id=object_id,
             similar_objects=[StorageObjectResponse.from_orm(obj) for obj in ordered_objects],
             distances=distances,
-            total_embeddings=kg_pipeline.get_stats()["total_embeddings"]
+            total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"]
         )
 
     except ValueError as e:
@@ -199,17 +199,25 @@ async def find_similar_objects(
 @router.get("/kg/stats")
 async def get_kg_stats(
     current_user: User = Depends(get_current_user),
+    api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
+    tenant_id: str = Depends(get_tenant_id),
 ):
     """
-    Get knowledge graph statistics.
+    Get knowledge graph statistics for the current tenant.
+
+    Uses tenant-specific collection based on API key mapping.
+    Returns statistics about the knowledge graph including total embeddings
+    and collection name for the authenticated tenant.
 
     Returns:
-        Statistics about the knowledge graph including total embeddings,
-        collection name, and ChromaDB status.
+        Statistics about the knowledge graph:
+        - status: "ok" if successful
+        - total_embeddings: Number of embeddings in tenant's collection
+        - collection: Name of the tenant's ChromaDB collection
     """
     try:
         from knowledge_graph.pipeline import kg_pipeline
-        stats = kg_pipeline.get_stats()
+        stats = kg_pipeline.get_stats(tenant_id=tenant_id)
 
         return {
             "status": "ok",
@@ -224,18 +232,21 @@ async def get_kg_stats(
 @router.get("/kg/health")
 async def kg_health_check(
     current_user: User = Depends(get_current_user),
+    api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
+    tenant_id: str = Depends(get_tenant_id),
 ):
     """
-    Health check for knowledge graph system.
+    Health check for knowledge graph system for the current tenant.
 
-    Returns:
-        Health status including OpenAI configuration and ChromaDB connectivity.
+    Uses tenant-specific collection based on API key mapping.
+    Returns health status including OpenAI configuration, ChromaDB connectivity,
+    and statistics for the authenticated tenant's collection.
     """
     try:
         from knowledge_graph.pipeline import kg_pipeline
         import os
 
-        stats = kg_pipeline.get_stats()
+        stats = kg_pipeline.get_stats(tenant_id=tenant_id)
         openai_configured = bool(os.getenv("OPENAI_API_KEY"))
         from knowledge_graph.embedding_service import embedding_service as _emb
 
@@ -314,7 +325,7 @@ async def kg_text_search(
         vs_results = tenant_vector_store.search_by_text(query_text=query, query_embedding=vector, limit=limit, filters=where)
 
         if not vs_results:
-            return KGSearchResponse(query=query, results=[], total_embeddings=kg_pipeline.get_stats()["total_embeddings"])  # type: ignore
+            return KGSearchResponse(query=query, results=[], total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"])  # type: ignore
 
         # Get unique object IDs to fetch source files
         unique_object_ids = list(set(r["object_id"] for r in vs_results))
@@ -370,13 +381,288 @@ async def kg_text_search(
             )
             results.append(chunk)
 
-        return KGSearchResponse(query=query, results=results, total_embeddings=kg_pipeline.get_stats()["total_embeddings"])  # type: ignore
+        return KGSearchResponse(query=query, results=results, total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"])  # type: ignore
 
     except HTTPException:
         raise
     except Exception as e:
         print(f"❌ KG text search error: {e}")
         raise HTTPException(status_code=500, detail=f"KG search failed: {str(e)}")
+
+
+@router.get("/kg/vibe-search", response_model=KGSearchResponse)
+async def kg_vibe_search(
+    query: str = Query(..., description="Vibe/style/mood query (e.g., 'aggressive racing style')"),
+    limit: int = Query(10, ge=1, le=50),
+    collection_like: Optional[str] = Query(None),
+    mine: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """
+    Advanced vibe/style-based semantic search with GPT-4 re-ranking.
+
+    This endpoint combines:
+    1. Vector search for candidate products (top 30)
+    2. GPT-4 analysis of AI metadata for intelligent re-ranking
+    3. Returns products that best match the vibe/style/mood query
+
+    Perfect for queries like:
+    - "aggressive racing style"
+    - "minimal professional setup"
+    - "wild downhill aesthetic"
+    - "dark skull theme"
+    """
+    try:
+        from knowledge_graph.embedding_service import embedding_service
+        from knowledge_graph.vector_store import get_vector_store
+        from knowledge_graph.pipeline import kg_pipeline
+        from openai import AsyncOpenAI
+        import os
+
+        # STEP 1: Vector search for candidates (cast wider net)
+        candidate_limit = min(30, limit * 3)
+        tenant_vector_store = get_vector_store(tenant_id=tenant_id)
+
+        # Build metadata filter
+        where: Optional[dict] = None
+        if current_user.trust_level == "admin":
+            if mine:
+                where = {"owner_user_id": current_user.id}
+        else:
+            tenant_from_key = tenant_id_for_api_key(api_key_header)
+            tenant_email_domain = None
+            try:
+                if getattr(current_user, "email", None) and "@" in current_user.email:
+                    tenant_email_domain = current_user.email.split("@", 1)[1].strip().lower()
+            except Exception:
+                tenant_email_domain = None
+
+            if mine:
+                where = {"owner_user_id": current_user.id}
+            else:
+                tenant_scope = tenant_from_key or tenant_email_domain
+                where = {"tenant_id": tenant_scope} if tenant_scope else {"owner_user_id": current_user.id}
+
+        # Vector search
+        vector = await embedding_service.generate_embedding(query)
+        vs_results = tenant_vector_store.search_by_text(query_text=query, query_embedding=vector, limit=candidate_limit, filters=where)
+
+        if not vs_results or len(vs_results) < 2:
+            # Not enough candidates for re-ranking, return regular results
+            return KGSearchResponse(query=query, results=[], total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"])  # type: ignore
+
+        # Get unique object IDs
+        unique_object_ids = list(set(r["object_id"] for r in vs_results))
+
+        # STEP 2: Fetch storage objects with AI metadata
+        q = db.query(StorageObject, User.email.label('owner_email')).outerjoin(User, StorageObject.owner_user_id == User.id).filter(
+            StorageObject.id.in_(unique_object_ids),
+            StorageObject.tenant_id == tenant_id
+        )
+        if collection_like:
+            like = f"%{collection_like}%"
+            q = q.filter(StorageObject.collection_id.ilike(like))
+
+        rows = q.all()
+
+        # Build objects map with access control
+        objects_map = {}
+        candidates_for_gpt = []
+
+        for so, owner_email in rows:
+            # Access control
+            try:
+                if not (getattr(so, "is_public", False) or so.owner_user_id == current_user.id or current_user.trust_level == "admin"):
+                    continue
+            except Exception:
+                pass
+
+            objects_map[so.id] = (so, owner_email)
+
+            # Extract AI metadata for GPT-4
+            metadata = so.ai_context_metadata or {}
+            product_info = {
+                "object_id": so.id,
+                "title": so.ai_title or so.title or "Unknown",
+                "style": metadata.get("product_analysis", {}).get("style"),
+                "mood": metadata.get("visual_analysis", {}).get("aesthetics", {}).get("mood"),
+                "aesthetic": metadata.get("visual_analysis", {}).get("aesthetics", {}).get("aestheticStyle"),
+                "visual_harmony": metadata.get("layout_intelligence", {}).get("visualHarmonyTags", []),
+                "emotional_appeal": metadata.get("semantic_properties", {}).get("emotionalAppeal", []),
+                "brand_perception": metadata.get("semantic_properties", {}).get("brandPerception"),
+                "keywords": metadata.get("semantic_properties", {}).get("keywords", [])[:15],  # Limit keywords
+            }
+            candidates_for_gpt.append(product_info)
+
+        if not candidates_for_gpt:
+            return KGSearchResponse(query=query, results=[], total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"])  # type: ignore
+
+        # STEP 3: GPT-4 Re-Ranking
+        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        gpt_prompt = f"""You are an expert at matching products to style/vibe/mood queries.
+
+User query: "{query}"
+
+Analyze these products and rank them by how well they match the query's vibe/style/mood.
+Consider: style attributes, mood, aesthetics, emotional appeal, visual themes.
+
+Products:
+{json.dumps(candidates_for_gpt, indent=2, ensure_ascii=False)}
+
+Return ONLY a JSON array of object_ids in ranked order (best matches first), limited to top {limit}.
+Format: {{"ranked_ids": [123, 456, 789, ...]}}
+"""
+
+        gpt_response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",  # Fast and cheap for re-ranking
+            messages=[
+                {"role": "system", "content": "You are a product ranking expert. Return only valid JSON."},
+                {"role": "user", "content": gpt_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+
+        # Parse GPT-4 response
+        try:
+            gpt_result = json.loads(gpt_response.choices[0].message.content)
+            ranked_ids = gpt_result.get("ranked_ids", [])
+        except Exception as e:
+            print(f"⚠️ GPT-4 response parsing failed: {e}")
+            # Fallback to vector search order
+            ranked_ids = unique_object_ids[:limit]
+
+        # STEP 4: Build final results in ranked order
+        results: List[SearchResultChunk] = []
+        for idx, object_id in enumerate(ranked_ids):
+            if object_id not in objects_map:
+                continue
+
+            so, owner_email = objects_map[object_id]
+
+            # Find original vector search result for distance
+            vs_result = next((r for r in vs_results if r["object_id"] == object_id), None)
+            distance = vs_result["distance"] if vs_result else 1.0
+            similarity_score = max(0, min(100, (1 - distance / 2) * 100))
+
+            # Boost similarity score based on GPT-4 ranking
+            rank_boost = (len(ranked_ids) - idx) / len(ranked_ids) * 20  # Up to +20%
+            adjusted_similarity = min(100, similarity_score + rank_boost)
+
+            resp = StorageObjectResponse.from_orm(so)
+            resp.owner_email = owner_email
+
+            # Get embedding text from vector result
+            content = vs_result.get("document", "") if vs_result else ""
+            metadata_dict = vs_result.get("metadata", {}) if vs_result else {}
+
+            chunk = SearchResultChunk(
+                content=content,
+                embedding_type=metadata_dict.get("embedding_type"),
+                embedding_index=metadata_dict.get("embedding_index"),
+                metadata=metadata_dict,
+                source_file=resp,
+                distance=distance,
+                similarity_score=round(adjusted_similarity, 1)
+            )
+            results.append(chunk)
+
+        return KGSearchResponse(query=query, results=results, total_embeddings=kg_pipeline.get_stats(tenant_id=tenant_id)["total_embeddings"])  # type: ignore
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Vibe search error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Vibe search failed: {str(e)}")
+
+
+@router.post("/kg/embed/{object_id}")
+async def regenerate_embedding(
+    object_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """
+    Regenerate embedding for a single storage object.
+
+    This endpoint:
+    1. Fetches the storage object with AI metadata
+    2. Generates new embedding text using create_embedding_text()
+    3. Creates new 3072-dim vector using OpenAI
+    4. Updates ChromaDB with new embedding
+
+    Use this after updating the create_embedding_text() function to regenerate
+    embeddings with richer semantic data.
+    """
+    # Fetch storage object
+    storage_obj = db.query(StorageObject).filter(
+        StorageObject.id == object_id,
+        StorageObject.tenant_id == tenant_id
+    ).first()
+
+    if not storage_obj:
+        raise HTTPException(status_code=404, detail="Storage object not found")
+
+    # Access control - only owner or admin
+    if storage_obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        # Get tenant-specific vector store
+        tenant_vector_store = get_vector_store(tenant_id=tenant_id)
+
+        # Create new embedding text using updated create_embedding_text()
+        embedding_text = embedding_service.create_embedding_text(storage_obj)
+
+        if not embedding_text or len(embedding_text.strip()) < 10:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot generate embedding: insufficient metadata"
+            )
+
+        # Generate new embedding vector
+        embedding_vector_list = await embedding_service.generate_embedding(embedding_text)
+
+        # Create EmbeddingVector object
+        from knowledge_graph.models import EmbeddingVector
+        embedding_vector = EmbeddingVector(
+            object_id=storage_obj.id,
+            vector=embedding_vector_list,
+            embedding_text=embedding_text,
+            metadata={
+                "title": storage_obj.ai_title or storage_obj.title,
+                "ai_category": storage_obj.ai_category,
+                "tenant_id": tenant_id,
+                "updated_at": str(storage_obj.updated_at)
+            }
+        )
+
+        # Update or create embedding in ChromaDB
+        tenant_vector_store.upsert_embedding(embedding_vector)
+
+        return {
+            "status": "success",
+            "object_id": storage_obj.id,
+            "embedding_text_length": len(embedding_text),
+            "embedding_preview": embedding_text[:200] + "..." if len(embedding_text) > 200 else embedding_text,
+            "vector_dimensions": len(embedding_vector),
+            "message": "Embedding regenerated successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Embedding regeneration error for object {object_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Embedding regeneration failed: {str(e)}")
 
 
 @router.get("/proxy/{object_id}")
@@ -859,9 +1145,9 @@ async def upload_file(
                 from pathlib import Path
                 
                 print(f"📦 DIRECT HLS processing for {temp_zip.id} - avoiding transcoding loop")
-                
+
                 # Get file path and extract HLS into ORIGINAL video's basename directory
-                file_path = generic_storage.absolute_path_for_key(temp_zip.object_key)
+                file_path = generic_storage.absolute_path_for_key(temp_zip.object_key, temp_zip.tenant_id)
                 original_basename = Path(original_video.object_key).stem
                 hls_extract_dir = file_path.parent / original_basename
                 
@@ -1254,7 +1540,7 @@ async def analyze_existing_object(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     try:
-        file_path = generic_storage.absolute_path_for_key(obj.object_key)
+        file_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="File missing from storage")
 
@@ -1418,7 +1704,7 @@ def get_asset_variant_references(
         # Detect HLS for videos (mirrors logic used in listing)
         hls_url = None
         try:
-            path = generic_storage.absolute_path_for_key(obj.object_key)
+            path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             basename = Path(obj.object_key).stem
             hls_dir_path = path.parent / basename
             master = hls_dir_path / "master.m3u8"
@@ -1572,7 +1858,7 @@ def get_asset_variant_references_batch(
         # Detect HLS for videos
         hls_url = None
         try:
-            path = generic_storage.absolute_path_for_key(obj.object_key)
+            path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             basename = Path(obj.object_key).stem
             hls_dir_path = path.parent / basename
             master = hls_dir_path / "master.m3u8"
@@ -1705,7 +1991,7 @@ def get_media_variant(
     mime = (obj.mime_type or "").lower()
     if not mime.startswith("image/"):
         # For non-images, return original file for now
-        path = generic_storage.absolute_path_for_key(obj.object_key)
+        path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
         if not path.exists():
             raise HTTPException(status_code=404, detail="File missing")
         return FileResponse(path, media_type=obj.mime_type, filename=obj.original_filename)
@@ -1714,7 +2000,7 @@ def get_media_variant(
     # Try local file first
     src_path = None
     if obj.object_key:
-        src_path = generic_storage.absolute_path_for_key(obj.object_key)
+        src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
 
     # Handle external URIs if local file doesn't exist
     if (not src_path or not src_path.exists()) and obj.external_uri:
@@ -1970,10 +2256,10 @@ def get_object_metadata(
     
     # Check for HLS files if this is a video or pre-transcoded zip
     if (obj.mime_type and obj.mime_type.startswith("video/")) or \
-       (obj.mime_type and obj.mime_type in ["application/zip", "application/x-zip-compressed"] and 
+       (obj.mime_type and obj.mime_type in ["application/zip", "application/x-zip-compressed"] and
         obj.original_filename and obj.original_filename.lower().endswith('.zip')):
         try:
-            path = generic_storage.absolute_path_for_key(obj.object_key)
+            path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             basename = Path(obj.object_key).stem
             hls_dir_path = path.parent / basename
 
@@ -2054,10 +2340,10 @@ def list_objects(
         response_obj.owner_email = owner_email
         # Check for HLS files if this is a video or pre-transcoded zip
         if (storage_obj.mime_type and storage_obj.mime_type.startswith("video/")) or \
-           (storage_obj.mime_type and storage_obj.mime_type in ["application/zip", "application/x-zip-compressed"] and 
+           (storage_obj.mime_type and storage_obj.mime_type in ["application/zip", "application/x-zip-compressed"] and
             storage_obj.original_filename and storage_obj.original_filename.lower().endswith('.zip')):
             try:
-                path = generic_storage.absolute_path_for_key(storage_obj.object_key)
+                path = generic_storage.absolute_path_for_key(storage_obj.object_key, storage_obj.tenant_id)
                 basename = Path(storage_obj.object_key).stem
                 hls_dir_path = path.parent / basename
 
@@ -2161,7 +2447,7 @@ def download_file(
             raise HTTPException(status_code=401, detail="Authentication required")
         if obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
             raise HTTPException(status_code=403, detail="Forbidden")
-    path = generic_storage.absolute_path_for_key(obj.object_key)
+    path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="File missing")
     obj.download_count = (obj.download_count or 0) + 1
@@ -2227,7 +2513,7 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
 
     try:
         basename = Path(obj.object_key).stem
-        hls_dir_path = generic_storage.absolute_path_for_key(obj.object_key).parent / basename
+        hls_dir_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id).parent / basename
         if hls_dir_path.is_dir():
             shutil.rmtree(hls_dir_path)
     except Exception as e:
@@ -2891,116 +3177,6 @@ def get_public_object(
     
     return obj
 
-
-# ============================================================================
-# O'Neal Product Enrichment Routes
-# ============================================================================
-
-@router.get("/oneal/products/{product_id}")
-async def get_oneal_product_enriched(
-    product_id: str,
-    db: Session = Depends(get_db)
-):
-    """
-    Get O'Neal product enriched with Storage media URLs.
-
-    Returns O'Neal API product data PLUS storage.media_url field with support for:
-    - Dynamic resizing (width, height parameters)
-    - Format conversion (format=webp, jpg, png)
-    - Quality control (quality=1-100)
-    - Automatic caching
-
-    Example: storage.media_url + "?width=400&format=webp&quality=80"
-    """
-    import httpx
-    
-    # 1. Fetch product from O'Neal API
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            f"https://oneal-api.arkturian.com/v1/products/{product_id}",
-            headers={"X-API-Key": "oneal_demo_token"}
-        )
-        if not response.is_success:
-            raise HTTPException(status_code=response.status_code, detail="Product not found")
-        
-        product = response.json()
-    
-    # 2. Find storage object
-    context_value = f"oneal_product_{product_id}"
-    storage_obj = db.query(StorageObject).filter(
-        StorageObject.context == context_value,
-        StorageObject.tenant_id == "oneal"
-    ).first()
-    
-    # 3. Enrich with storage URLs
-    if storage_obj:
-        product["storage"] = {
-            "id": storage_obj.id,
-            "media_url": f"https://api-storage.arkturian.com/storage/media/{storage_obj.id}",
-            "thumbnail_url": storage_obj.thumbnail_url,
-            "ai_title": storage_obj.ai_title,
-            "ai_tags": storage_obj.ai_tags,
-            "transform_hints": {
-                "thumbnail": "?variant=thumbnail",
-                "medium": "?variant=medium",
-                "custom_400px": "?width=400&format=webp&quality=80",
-                "custom_800px": "?width=800&format=webp&quality=85"
-            }
-        }
-    else:
-        product["storage"] = None
-    
-    return product
-
-
-@router.get("/oneal/products")
-async def list_oneal_products_enriched(
-    limit: int = 50,
-    offset: int = 0,
-    search: str = None,
-    db: Session = Depends(get_db)
-):
-    """
-    List O'Neal products enriched with Storage proxy URLs.
-    """
-    import httpx
-    
-    # Build params
-    params = {"limit": limit, "offset": offset}
-    if search:
-        params["search"] = search
-    
-    # Fetch from O'Neal API
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(
-            "https://oneal-api.arkturian.com/v1/products",
-            headers={"X-API-Key": "oneal_demo_token"},
-            params=params
-        )
-        if not response.is_success:
-            raise HTTPException(status_code=500, detail="Failed to fetch products")
-        
-        data = response.json()
-        products = data.get("results", [])
-    
-    # Enrich each product
-    for product in products:
-        product_id = product.get("id")
-        if product_id:
-            context_value = f"oneal_product_{product_id}"
-            storage_obj = db.query(StorageObject).filter(
-                StorageObject.context == context_value,
-                StorageObject.tenant_id == "oneal"
-            ).first()
-
-            if storage_obj:
-                product["storage"] = {
-                    "id": storage_obj.id,
-                    "media_url": f"https://api-storage.arkturian.com/storage/media/{storage_obj.id}"
-                }
-    
-    data["results"] = products
-    return data
 
 
 @router.get("/objects/{object_id}/data-uri")
