@@ -9,6 +9,7 @@ from typing import Optional
 from database import get_db
 from models import User
 from config import settings
+from tenancy.config import tenant_id_for_api_key
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -61,6 +62,31 @@ def verify_api_key(api_key: str, db: Session) -> Optional[User]:
         user.last_active_at = datetime.utcnow()
         db.commit()
         return user
+
+    # Auto-provision user accounts for API keys defined via tenant config
+    tenant_id = tenant_id_for_api_key(api_key)
+    if tenant_id:
+        email = f"{tenant_id}@api"
+        display_name = tenant_id.replace("_", " ").title()
+        try:
+            user = User(
+                email=email,
+                display_name=display_name,
+                password_hash="",
+                api_key=api_key,
+                trust_level="admin",
+                device_ids=[],
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            return user
+        except Exception:
+            db.rollback()
+            # Fallback to lookup in case of race condition
+            user = db.query(User).filter(User.api_key == api_key).first()
+            if user:
+                return user
 
     return None
 
