@@ -128,6 +128,21 @@ class AsyncPipelineManager:
         # Remove None values so JSON stays clean
         return {k: v for k, v in summary.items() if v not in (None, "")}
 
+    @staticmethod
+    def _json_default(obj: Any) -> Any:
+        """Fallback serializer for task result payloads."""
+        try:
+            if hasattr(obj, "to_dict"):
+                return obj.to_dict()
+            if hasattr(obj, "__dict__"):
+                return {
+                    k: v for k, v in obj.__dict__.items()
+                    if not callable(v) and not k.startswith("__")
+                }
+        except Exception:
+            pass
+        return str(obj)
+
     def _log(self, message: str):
         """Write log message to file"""
         try:
@@ -168,7 +183,7 @@ class AsyncPipelineManager:
                 existing.started_at = started_dt
                 existing.completed_at = completed_dt
                 existing.error = task_info.error
-                existing.result = json.dumps(task_info.result) if task_info.result else None
+                existing.result = json.dumps(task_info.result, default=self._json_default) if task_info.result else None
             else:
                 # Create new task
                 new_task = AsyncTask(
@@ -182,7 +197,7 @@ class AsyncPipelineManager:
                     started_at=started_dt,
                     completed_at=completed_dt,
                     error=task_info.error,
-                    result=json.dumps(task_info.result) if task_info.result else None
+                    result=json.dumps(task_info.result, default=self._json_default) if task_info.result else None
                 )
                 db.add(new_task)
 
