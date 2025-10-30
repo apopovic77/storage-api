@@ -614,40 +614,39 @@ async def load_image_bytes_for_analysis(
                 return fallback
             raise FileNotFoundError(f"Image not found for storage object {getattr(storage_obj, 'id', 'unknown')}")
 
-    try:
-        with Image.open(image_source) as img:
-            img_format = target_format
+    with Image.open(image_source) as img:
+        img_format = target_format
 
-            if max_edge:
-                w, h = img.size
-                if w > 0 and h > 0:
-                    if w >= h:
-                        target_w = min(max_edge, w)
-                        target_h = int(h * (target_w / float(w)))
-                    else:
-                        target_h = min(max_edge, h)
-                        target_w = int(w * (target_h / float(h)))
-                    if target_w > 0 and target_h > 0 and (target_w != w or target_h != h):
-                        img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        if max_edge:
+            w, h = img.size
+            if w > 0 and h > 0:
+                if w >= h:
+                    target_w = min(max_edge, w)
+                    target_h = int(h * (target_w / float(w)))
+                else:
+                    target_h = min(max_edge, h)
+                    target_w = int(w * (target_h / float(h)))
+                if target_w > 0 and target_h > 0 and (target_w != w or target_h != h):
+                    img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-            if img_format in {"jpg", "jpeg"} and img.mode in {"RGBA", "LA", "P"}:
-                img = img.convert("RGB")
+        if img_format in {"jpg", "jpeg"} and img.mode in {"RGBA", "LA", "P"}:
+            img = img.convert("RGB")
 
-            out_buffer = BytesIO()
-            save_kwargs = {}
-            if img_format in {"jpg", "jpeg"}:
-                save_kwargs = {"quality": quality, "optimize": True}
-                mime_out = "image/jpeg"
-                img.save(out_buffer, format="JPEG", **save_kwargs)
-            elif img_format == "png":
-                mime_out = "image/png"
-                img.save(out_buffer, format="PNG")
-            else:  # webp default
-                save_kwargs = {"quality": quality, "method": 6}
-                mime_out = "image/webp"
-                img.save(out_buffer, format="WEBP", **save_kwargs)
+        out_buffer = BytesIO()
+        save_kwargs = {}
+        if img_format in {"jpg", "jpeg"}:
+            save_kwargs = {"quality": quality, "optimize": True}
+            mime_out = "image/jpeg"
+            img.save(out_buffer, format="JPEG", **save_kwargs)
+        elif img_format == "png":
+            mime_out = "image/png"
+            img.save(out_buffer, format="PNG")
+        else:  # webp default
+            save_kwargs = {"quality": quality, "method": 6}
+            mime_out = "image/webp"
+            img.save(out_buffer, format="WEBP", **save_kwargs)
 
-            return out_buffer.getvalue(), mime_out
+        return out_buffer.getvalue(), mime_out
 
 
 def extract_thumbnails_for_ai(video_path: Path, output_dir: Path) -> int:
