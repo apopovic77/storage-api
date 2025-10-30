@@ -327,7 +327,7 @@ class AsyncPipelineManager:
         self._log(f"Task {task_info.task_id}: Running AI analysis")
 
         # Load file from storage
-        from storage.generic_storage import generic_storage
+        from storage.service import generic_storage
         file_path = generic_storage.absolute_path_for_key(storage_obj.object_key)
         if not file_path.exists():
             raise FileNotFoundError(f"File missing from storage: {file_path}")
@@ -428,7 +428,7 @@ class AsyncPipelineManager:
         self._log(f"Task {task_info.task_id}: Running AI analysis")
 
         # Load file from storage
-        from storage.generic_storage import generic_storage
+        from storage.service import generic_storage
         file_path = generic_storage.absolute_path_for_key(storage_obj.object_key)
         if not file_path.exists():
             raise FileNotFoundError(f"File missing from storage: {file_path}")
