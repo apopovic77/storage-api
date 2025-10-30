@@ -77,9 +77,17 @@ jobs:
               TARGET_DIR="/var/www/api-storage"
             fi
             cd "$TARGET_DIR"
+            if [ ! -d .git ]; then
+              git init
+              if git remote | grep -q '^origin$'; then
+                git remote set-url origin https://github.com/apopovic77/storage-api.git
+              else
+                git remote add origin https://github.com/apopovic77/storage-api.git
+              fi
+            fi
             git fetch origin
             git checkout dev
-            git pull origin dev
+            git reset --hard origin/dev
             /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
@@ -117,9 +125,17 @@ jobs:
               TARGET_DIR="/var/www/api-storage.arkturian.com"
             fi
             cd "$TARGET_DIR"
+            if [ ! -d .git ]; then
+              git init
+              if git remote | grep -q '^origin$'; then
+                git remote set-url origin https://github.com/apopovic77/storage-api.git
+              else
+                git remote add origin https://github.com/apopovic77/storage-api.git
+              fi
+            fi
             git fetch origin
             git checkout main
-            git pull origin main
+            git reset --hard origin/main
             /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
