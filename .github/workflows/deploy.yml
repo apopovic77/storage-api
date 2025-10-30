@@ -83,6 +83,7 @@ jobs:
             fi
             git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
             git fetch origin
+            git clean -fdx
             git checkout dev
             git reset --hard origin/dev
             /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
@@ -128,6 +129,7 @@ jobs:
             fi
             git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
             git fetch origin
+            git clean -fdx
             git checkout main
             git reset --hard origin/main
             /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
