@@ -1986,30 +1986,11 @@ def get_media_variant(
     - If variant == full: stream original file.
     - width/height/format/quality can override defaults and will materialize a persistent derivative in webview dir.
     """
-    # Try tenant-specific first, then public
-    obj = None
-    if tenant_id:
-        obj = db.query(StorageObject).filter(
-            StorageObject.id == object_id,
-            StorageObject.tenant_id == tenant_id
-        ).first()
-    
-    # If not found and no tenant_id, try public objects
-    if not obj:
-        obj = db.query(StorageObject).filter(
-            StorageObject.id == object_id,
-            StorageObject.is_public == True
-        ).first()
-    
+    # Public endpoint - allow access to any storage object by globally unique ID
+    obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+
     if not obj:
         raise HTTPException(status_code=404, detail="Not found")
-    
-    # Check permissions
-    if not obj.is_public:
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        if obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
-            raise HTTPException(status_code=403, detail="Forbidden")
 
     mime = (obj.mime_type or "").lower()
     if not mime.startswith("image/"):
