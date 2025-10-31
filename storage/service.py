@@ -801,6 +801,7 @@ def bulk_delete_objects(
     name: Optional[str] = None,
     collection_like: Optional[str] = None,
     context_like: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     current_user = None
 ) -> int:
     """
@@ -819,7 +820,10 @@ def bulk_delete_objects(
     if context_like:
         q = q.filter(StorageObject.context.ilike(f"%{context_like}%"))
 
-    if current_user and current_user.trust_level != "admin":
+    if tenant_id:
+        q = q.filter(StorageObject.tenant_id == tenant_id)
+
+    if current_user and current_user.trust_level != "admin" and not tenant_id:
         q = q.filter(StorageObject.owner_user_id == current_user.id)
 
     initial_objects = q.all()

@@ -40,6 +40,10 @@ class BulkDeleteRequest(BaseModel):
     context_like: Optional[str] = None
 
 
+class TenantDeleteRequest(BaseModel):
+    tenant_id: str
+
+
 class SimilarityResponse(BaseModel):
     """Response for similarity search"""
     query_object_id: int
@@ -785,6 +789,22 @@ def bulk_delete_filtered_objects(
         return {"deleted_count": deleted_count, "message": f"{deleted_count} items deleted successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+
+
+@router.post("/admin/delete-tenant")
+def delete_tenant_objects(
+    payload: TenantDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        deleted = bulk_delete_objects(db, tenant_id=payload.tenant_id, current_user=current_user)
+        return {"tenant_id": payload.tenant_id, "deleted_count": deleted, "message": f"Deleted {deleted} objects for tenant {payload.tenant_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete tenant objects: {e}")
 
 
 # --- Admin Cleanup Models ---
