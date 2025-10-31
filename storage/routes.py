@@ -37,6 +37,7 @@ admin_router = APIRouter(prefix="/admin")
 class BulkDeleteRequest(BaseModel):
     name: Optional[str] = None
     collection_like: Optional[str] = None
+    context_like: Optional[str] = None
 
 
 class SimilarityResponse(BaseModel):
@@ -778,6 +779,7 @@ def bulk_delete_filtered_objects(
             db,
             name=payload.name,
             collection_like=payload.collection_like,
+            context_like=payload.context_like,
             current_user=current_user
         )
         return {"deleted_count": deleted_count, "message": f"{deleted_count} items deleted successfully."}

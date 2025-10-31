@@ -15,14 +15,14 @@ import sys
 
 ONEAL_API_URL = "https://oneal-api.arkturian.com/v1/products"
 ONEAL_API_KEY = "oneal_demo_token"
-STORAGE_API_URL = "https://api.arkturian.com/storage/upload"
+STORAGE_API_URL = "https://api-storage.arkturian.com/storage/upload"
 
 
 async def fetch_oneal_products(limit: int = 10):
     """Fetch products from O'Neal API."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
-            f"{ONEAL_API_URL}?format=resolved&limit={limit}",
+            f"{ONEAL_API_URL}?limit={limit}",  # WITHOUT format=resolved to get original URLs
             headers={"X-API-Key": ONEAL_API_KEY}
         )
         response.raise_for_status()
@@ -43,12 +43,16 @@ async def upload_product_to_storage(product: dict):
     else:
         category_str = str(category)
 
-    # Extract hero image URL
-    media = product.get("media", {})
-    hero = media.get("hero", {})
-    variants = hero.get("variants", {})
-    image_url = variants.get("preview") or variants.get("thumb") or variants.get("print")
+    # Extract hero image URL from media array (WITHOUT format=resolved)
+    media_list = product.get("media", [])
+    if not media_list:
+        return None, "No media"
 
+    hero = next((m for m in media_list if m.get("role") == "hero"), None)
+    if not hero:
+        return None, "No hero image"
+
+    image_url = hero.get("src")
     if not image_url:
         return None, "No image URL"
 

@@ -796,7 +796,13 @@ def _is_audio_only_webm_helper(file_path: Path) -> bool:
         return False
 
 
-def bulk_delete_objects(db, name: Optional[str] = None, collection_like: Optional[str] = None, current_user = None) -> int:
+def bulk_delete_objects(
+    db,
+    name: Optional[str] = None,
+    collection_like: Optional[str] = None,
+    context_like: Optional[str] = None,
+    current_user = None
+) -> int:
     """
     Finds and deletes storage objects matching filter criteria, including their physical files
     and any other files that share a link_id with the found items.
@@ -810,6 +816,8 @@ def bulk_delete_objects(db, name: Optional[str] = None, collection_like: Optiona
         q = q.filter(StorageObject.collection_id.ilike(f"%{collection_like}%"))
     if name:
         q = q.filter(StorageObject.original_filename.ilike(f"%{name}%"))
+    if context_like:
+        q = q.filter(StorageObject.context.ilike(f"%{context_like}%"))
 
     if current_user and current_user.trust_level != "admin":
         q = q.filter(StorageObject.owner_user_id == current_user.id)
@@ -1364,4 +1372,3 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                 print(f"🧹 Cleaned up temporary file: {temp_file_for_external}")
             except Exception as cleanup_error:
                 print(f"⚠️  Failed to cleanup temporary file: {cleanup_error}")
-

@@ -19,10 +19,11 @@ nginx:
   port: 80
 
 environment:
-  DATABASE_URL: "sqlite:////var/www/storage-api/storage.db"
+  STORAGE_DATA_DIR: "/var/lib/storage-api"
+  STORAGE_DATABASE_URL: "sqlite:////var/lib/storage-api/storage.db"
   # Secrets must be provided via CI/CD or server env, not committed
   OPENAI_API_KEY: "${OPENAI_API_KEY}"
-  CHROMA_DB_PATH: "/var/www/storage-api/chroma_db"
+  CHROMA_DB_PATH: "/var/lib/storage-api/chroma_db"
   CHROMA_COLLECTION_NAME: "tenant_knowledge"
   HOST: "0.0.0.0"
   PORT: "8001"

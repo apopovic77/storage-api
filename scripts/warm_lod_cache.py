@@ -207,6 +207,7 @@ class CacheWarmer:
 
 
 def main():
+    global STORAGE_API_URL
     parser = argparse.ArgumentParser(description='Warm LOD image cache for Product Finder')
     parser.add_argument('--api-key', help='Storage API key (or set STORAGE_API_KEY env var)')
     parser.add_argument('--tenant', default=DEFAULT_TENANT, help=f'Tenant ID (default: {DEFAULT_TENANT})')
@@ -223,7 +224,6 @@ def main():
 
     # Update global config if custom URL provided
     if args.base_url != STORAGE_API_URL:
-        global STORAGE_API_URL
         STORAGE_API_URL = args.base_url
 
     # Run cache warming
