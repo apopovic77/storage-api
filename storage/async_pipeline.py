@@ -304,7 +304,7 @@ class AsyncPipelineManager:
         from storage.service import load_image_bytes_for_analysis
 
         attempts = [
-            {"max_edge": 1300, "target_format": "webp", "quality": 75},
+            {"max_edge": 1300, "target_format": "jpeg", "quality": 85},
             {"max_edge": 1024, "target_format": "jpeg", "quality": 75},
             {"max_edge": 768, "target_format": "png", "quality": 90},
         ]
