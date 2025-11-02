@@ -86,11 +86,11 @@ jobs:
             DATA_DIR="/var/lib/storage-api"
             mkdir -p "$DATA_DIR/chroma_db"
             for item in storage.db storage.db-shm storage.db-wal; do
-              if [ -f "$item" ]; then
+              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
                 cp -a "$item" "$DATA_DIR/$item"
               fi
             done
-            if [ -d chroma_db ]; then
+            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
                 cp -a chroma_db/. "$DATA_DIR/chroma_db/"
             fi
             git clean -fdx -e .env
@@ -142,11 +142,11 @@ jobs:
             DATA_DIR="/var/lib/storage-api"
             mkdir -p "$DATA_DIR/chroma_db"
             for item in storage.db storage.db-shm storage.db-wal; do
-              if [ -f "$item" ]; then
+              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
                 cp -a "$item" "$DATA_DIR/$item"
               fi
             done
-            if [ -d chroma_db ]; then
+            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
                 cp -a chroma_db/. "$DATA_DIR/chroma_db/"
             fi
             git clean -fdx -e .env
