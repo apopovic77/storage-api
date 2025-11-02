@@ -566,7 +566,11 @@ async def _analyze_vision_comprehensive(
             print(f"❌ Vision analysis failed: {e}", flush=True)
             import traceback
             traceback.print_exc()
-            return _error_response(f"Vision analysis failed: {e}")
+            error_result = _error_response(f"Vision analysis failed: {e}")
+            error_result["mode"] = "vision_comprehensive_error"
+            error_result["prompt"] = prompt_text
+            error_result.setdefault("embedding_info", {}).setdefault("metadata", {})["stacktrace"] = traceback.format_exc()
+            return error_result
 
 
 async def analyze_content(
@@ -944,9 +948,21 @@ def _clean_json_response(response: str) -> str:
 
 
 def _error_response(reason: str) -> Dict[str, Any]:
-    """Return error response"""
+    """Return structured error response for downstream consumers."""
     return {
         "category": "error",
         "danger_potential": 1,
-        "safety_info": {"isSafe": True, "confidence": 0.5, "reasoning": reason, "flags": []}
+        "safety_info": {
+            "isSafe": True,
+            "confidence": 0.5,
+            "reasoning": reason,
+            "flags": [],
+        },
+        "mode": "error",
+        "ai_response": reason,
+        "embedding_info": {
+            "metadata": {
+                "error": reason,
+            }
+        }
     }
