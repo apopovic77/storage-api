@@ -10,7 +10,11 @@ This script:
 
 import asyncio
 import httpx
+import os
+import subprocess
 import sys
+import time
+from pathlib import Path
 
 
 ONEAL_API_URL = "https://oneal-api.arkturian.com/v1/products"
@@ -161,6 +165,59 @@ async def import_products(limit: int = 10):
     return imported, errors
 
 
+def sync_oneal_products_repo() -> bool:
+    """
+    After importing media into storage, synchronise oneal-api/products.json with
+    the freshly created storage IDs and push a release.
+    """
+    repo_path = Path(os.environ.get("ONEAL_API_PATH", "/var/www/oneal-api"))
+
+    if not repo_path.exists():
+        print(f"⚠️  oneal-api repo not found at {repo_path}. Skipping products.json sync.")
+        return False
+
+    python_executable = os.environ.get("ONEAL_API_PYTHON", "/usr/bin/python3")
+    push_script = repo_path / "push-dev.sh"
+    release_script = repo_path / "release.sh"
+
+    try:
+        print("🛠️  Updating oneal-api products.json with new storage IDs...")
+        subprocess.run(
+            [python_executable, "scripts/populate_storage_ids.py"],
+            cwd=repo_path,
+            check=True,
+        )
+
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        if not status.stdout.strip():
+            print("ℹ️  No changes detected in products.json. Nothing to commit.")
+            return False
+
+        print("📝 Changes detected. Committing and releasing oneal-api...")
+        subprocess.run(
+            [str(push_script), "chore: refresh storage ids"],
+            cwd=repo_path,
+            check=True,
+        )
+        subprocess.run(
+            [str(release_script)],
+            cwd=repo_path,
+            check=True,
+        )
+        print("✅ oneal-api deployment refreshed with latest storage IDs.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        print(f"❌ Failed to sync oneal-api repo: {exc}")
+        return False
+
+
 async def main():
     """Main entry point."""
     import argparse
@@ -180,8 +237,21 @@ async def main():
     print(f"  • AI Analysis: automatic (background)")
     print("="*60 + "\n")
 
+    sync_after_import = os.environ.get("SYNC_ONEAL_PRODUCTS", "true").lower() not in {"false", "0", "no"}
+
     try:
-        await import_products(limit=args.limit)
+        start_time = time.perf_counter()
+        imported, errors = await import_products(limit=args.limit)
+        duration = time.perf_counter() - start_time
+        print(f"⏱️  Import duration: {duration:.1f} seconds")
+
+        if imported and sync_after_import:
+            sync_oneal_products_repo()
+        elif not sync_after_import:
+            print("ℹ️  Skipping products.json sync (SYNC_ONEAL_PRODUCTS disabled).")
+
+        if errors:
+            print("⚠️  Import finished with errors. See above for details.")
     except KeyboardInterrupt:
         print("\n\n⚠️  Import cancelled")
         sys.exit(1)
