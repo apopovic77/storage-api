@@ -293,6 +293,80 @@ class AsyncPipelineManager:
             del self.running_tasks[task_id]
             self._log(f"Cleaned up task {task_id}")
 
+    async def _run_image_analysis_with_retry(
+        self,
+        storage_obj: StorageObject,
+        tenant_id: str,
+        analyze_content,
+        cfg: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Attempt vision analysis with progressively smaller/simpler variants."""
+        from storage.service import load_image_bytes_for_analysis
+
+        attempts = [
+            {"max_edge": 1300, "target_format": "webp", "quality": 75},
+            {"max_edge": 1024, "target_format": "jpeg", "quality": 75},
+            {"max_edge": 768, "target_format": "png", "quality": 90},
+        ]
+
+        attempt_log = []
+        last_result: Optional[Dict[str, Any]] = None
+
+        for attempt in attempts:
+            try:
+                data, data_mime = await load_image_bytes_for_analysis(
+                    storage_obj,
+                    tenant_id,
+                    max_edge=attempt["max_edge"],
+                    target_format=attempt["target_format"],
+                    quality=attempt["quality"],
+                )
+            except Exception as exc:
+                attempt_log.append({**attempt, "status": "load_failed", "error": str(exc)})
+                last_result = {
+                    "category": "error",
+                    "mode": "image_load_error",
+                    "embedding_info": {"metadata": {"error": str(exc)}}
+                }
+                continue
+
+            result = await analyze_content(
+                data,
+                data_mime,
+                context=None,
+                vision_mode=cfg.get("vision_mode", "auto"),
+                ai_tasks_str=cfg.get("ai_tasks"),
+                context_role=cfg.get("context_role")
+            )
+
+            attempt_entry = {
+                **attempt,
+                "status": "ok",
+                "mime_type": data_mime,
+                "result_mode": result.get("mode"),
+                "result_category": result.get("category"),
+                "error": (result.get("embedding_info", {}) or {}).get("metadata", {}).get("error"),
+            }
+            attempt_log.append(attempt_entry)
+
+            last_result = result
+
+            if result.get("mode") not in {"error", "vision_comprehensive_error", "image_load_error"}:
+                break
+
+        if last_result is None:
+            last_result = {
+                "category": "error",
+                "mode": "analysis_unknown_failure",
+                "embedding_info": {"metadata": {"error": "Analysis produced no result"}}
+            }
+
+        embedding_info = last_result.setdefault("embedding_info", {}) or {}
+        metadata = embedding_info.setdefault("metadata", {}) or {}
+        metadata["analysisAttempts"] = attempt_log
+
+        return last_result
+
     async def _process_task(self, task_id: str, db: Session):
         """
         Process a task through the complete pipeline.
@@ -374,21 +448,24 @@ class AsyncPipelineManager:
 
         self._log(f"Task {task_info.task_id}: Running AI analysis")
 
-        # Load file from storage
-        from storage.service import generic_storage, load_image_bytes_for_analysis
+        # Load file from storage and run AI analysis with retries for images
+        from storage.service import generic_storage
         tenant_id = getattr(storage_obj, 'tenant_id', None)
         if not tenant_id:
             meta = getattr(storage_obj, 'metadata_json', None) or {}
             tenant_id = meta.get('tenant_id')
         tenant_id = tenant_id or 'arkturian'
         mime_type = (storage_obj.mime_type or "")
+
+        from ai_analysis.service import analyze_content
+        cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
+
         if mime_type.lower().startswith("image/"):
-            data, mime_type = await load_image_bytes_for_analysis(
+            analysis_result = await self._run_image_analysis_with_retry(
                 storage_obj,
                 tenant_id,
-                max_edge=1300,
-                target_format="webp",
-                quality=75,
+                analyze_content,
+                cfg
             )
         else:
             object_key = getattr(storage_obj, 'object_key', None)
@@ -403,17 +480,14 @@ class AsyncPipelineManager:
             with open(file_path, "rb") as f:
                 data = f.read()
 
-        # Run AI analysis (respect pipeline config if present)
-        from ai_analysis.service import analyze_content
-        cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
-        analysis_result = await analyze_content(
-            data,
-            mime_type,
-            context=None,
-            vision_mode=cfg.get("vision_mode", "auto"),
-            ai_tasks_str=cfg.get("ai_tasks"),
-            context_role=cfg.get("context_role")
-        )
+            analysis_result = await analyze_content(
+                data,
+                mime_type,
+                context=None,
+                vision_mode=cfg.get("vision_mode", "auto"),
+                ai_tasks_str=cfg.get("ai_tasks"),
+                context_role=cfg.get("context_role")
+            )
 
         # Ensure object is attached to this session
         storage_obj = db.merge(storage_obj)
@@ -505,21 +579,24 @@ class AsyncPipelineManager:
 
         self._log(f"Task {task_info.task_id}: Running AI analysis")
 
-        # Load file from storage
-        from storage.service import generic_storage, load_image_bytes_for_analysis
+        # Load file from storage and run AI analysis with retries for images
+        from storage.service import generic_storage
         tenant_id = getattr(storage_obj, 'tenant_id', None)
         if not tenant_id:
             meta = getattr(storage_obj, 'metadata_json', None) or {}
             tenant_id = meta.get('tenant_id')
         tenant_id = tenant_id or 'arkturian'
         mime_type = (storage_obj.mime_type or "")
+
+        from ai_analysis.service import analyze_content
+        cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
+
         if mime_type.lower().startswith("image/"):
-            data, mime_type = await load_image_bytes_for_analysis(
+            analysis_result = await self._run_image_analysis_with_retry(
                 storage_obj,
                 tenant_id,
-                max_edge=1300,
-                target_format="webp",
-                quality=75,
+                analyze_content,
+                cfg
             )
         else:
             object_key = getattr(storage_obj, 'object_key', None)
@@ -534,17 +611,14 @@ class AsyncPipelineManager:
             with open(file_path, "rb") as f:
                 data = f.read()
 
-        # Run AI analysis (respect pipeline config if present)
-        from ai_analysis.service import analyze_content
-        cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
-        analysis_result = await analyze_content(
-            data,
-            mime_type,
-            context=None,
-            vision_mode=cfg.get("vision_mode", "auto"),
-            ai_tasks_str=cfg.get("ai_tasks"),
-            context_role=cfg.get("context_role")
-        )
+            analysis_result = await analyze_content(
+                data,
+                mime_type,
+                context=None,
+                vision_mode=cfg.get("vision_mode", "auto"),
+                ai_tasks_str=cfg.get("ai_tasks"),
+                context_role=cfg.get("context_role")
+            )
 
         # Ensure object is attached to this session
         storage_obj = db.merge(storage_obj)
