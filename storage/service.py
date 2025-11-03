@@ -13,7 +13,7 @@ try:
     import magic
 except Exception:
     magic = None
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 from PIL import Image
 import piexif
 
@@ -515,7 +515,7 @@ async def _fetch_media_variant_via_http(
     max_edge: int,
     target_format: str,
     quality: int,
-) -> Optional[Tuple[bytes, str]]:
+) -> Optional[Tuple[bytes, str, Dict[str, Any]]]:
     """Attempt to fetch an optimized media variant via the public storage API."""
 
     object_id = getattr(storage_obj, "id", None)
@@ -550,13 +550,32 @@ async def _fetch_media_variant_via_http(
                 "content-type",
                 f"image/{'jpeg' if target_format in {'jpg', 'jpeg'} else target_format}"
             )
-            return response.content, content_type
+            return response.content, content_type, {}
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             return None
         raise
     except Exception:
         return None
+
+def _compute_trim_bounds(img: Image.Image) -> Optional[Tuple[int, int, int, int]]:
+    width, height = img.size
+    if width == 0 or height == 0:
+        return None
+
+    if "A" in img.getbands():
+        alpha = img.getchannel("A")
+        bbox = alpha.getbbox()
+        if bbox:
+            return bbox
+
+    gray = img.convert("L")
+    # Threshold: treat near-white as background
+    mask = gray.point(lambda p: 255 if p < 250 else 0)
+    bbox = mask.getbbox()
+    if bbox:
+        return bbox
+    return None
 
 
 async def load_image_bytes_for_analysis(
@@ -566,7 +585,8 @@ async def load_image_bytes_for_analysis(
     max_edge: int = 1300,
     target_format: str = "webp",
     quality: int = 75,
-) -> Tuple[bytes, str]:
+    trim_config: Optional[Dict[str, Any]] = None,
+) -> Tuple[bytes, str, Dict[str, Any]]:
     """Load an optimized image variant suitable for AI analysis.
 
     Falls back to fetching external references when the local media file is missing.
@@ -594,7 +614,7 @@ async def load_image_bytes_for_analysis(
         if candidate.exists():
             src_path = candidate
 
-    image_source = None
+    image_source: Optional[Any] = None
     if src_path and src_path.exists():
         image_source = src_path
     else:
@@ -611,11 +631,43 @@ async def load_image_bytes_for_analysis(
                 quality,
             )
             if fallback:
-                return fallback
-            raise FileNotFoundError(f"Image not found for storage object {getattr(storage_obj, 'id', 'unknown')}")
+                data_bytes, _, _ = fallback
+                image_source = BytesIO(data_bytes)
+            else:
+                raise FileNotFoundError(f"Image not found for storage object {getattr(storage_obj, 'id', 'unknown')}")
+
+    apply_trim = bool(trim_config and trim_config.get("enabled"))
+    trim_meta: Dict[str, Any] = {}
 
     with Image.open(image_source) as img:
+        original_width, original_height = img.size
         img_format = target_format
+
+        if apply_trim:
+            bbox = _compute_trim_bounds(img)
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                x1 = max(0, min(x1, original_width))
+                y1 = max(0, min(y1, original_height))
+                x2 = max(0, min(x2, original_width))
+                y2 = max(0, min(y2, original_height))
+                if x2 > x1 and y2 > y1 and (x1 != 0 or y1 != 0 or x2 != original_width or y2 != original_height):
+                    img = img.crop((x1, y1, x2, y2))
+                    trim_meta.update({
+                        "applied": True,
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x2,
+                        "y2": y2,
+                        "trim_width": x2 - x1,
+                        "trim_height": y2 - y1,
+                        "normalized": [
+                            x1 / original_width if original_width else 0,
+                            y1 / original_height if original_height else 0,
+                            x2 / original_width if original_width else 0,
+                            y2 / original_height if original_height else 0,
+                        ],
+                    })
 
         if max_edge:
             w, h = img.size
@@ -646,7 +698,18 @@ async def load_image_bytes_for_analysis(
             mime_out = "image/webp"
             img.save(out_buffer, format="WEBP", **save_kwargs)
 
-        return out_buffer.getvalue(), mime_out
+        trim_meta.setdefault("width", original_width)
+        trim_meta.setdefault("height", original_height)
+        if "applied" not in trim_meta:
+            trim_meta["applied"] = False
+        if "normalized" not in trim_meta and original_width and original_height:
+            trim_meta["normalized"] = [0.0, 0.0, 1.0, 1.0]
+        if "trim_width" not in trim_meta:
+            trim_meta["trim_width"] = trim_meta.get("width")
+        if "trim_height" not in trim_meta:
+            trim_meta["trim_height"] = trim_meta.get("height")
+
+        return out_buffer.getvalue(), mime_out, trim_meta
 
 
 def extract_thumbnails_for_ai(video_path: Path, output_dir: Path) -> int:

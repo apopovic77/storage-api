@@ -4,6 +4,8 @@ AI Analysis Prompts
 All AI prompts centralized in one place for easy maintenance.
 """
 
+import json
+
 # UNIFIED MODE: Complete analysis in one request
 UNIFIED_PROMPT = """
 Analysiere diesen Inhalt und gib eine umfassende strukturierte Antwort zurück.
@@ -320,7 +322,10 @@ ANTWORT FORMAT (JSON):
 VISION_ANALYSIS_PROMPT = """
 Analysiere dieses Bild UMFASSEND und extrahiere ALLE relevanten visuellen und semantischen Informationen.
 
+KONTEXTDATEN:
 {context_info}
+
+Nutze alle bereitgestellten Kontextinformationen. `image.width_px` und `image.height_px` geben die Pixelgröße des untersuchten Bildes an. Gib sämtliche `annotations.anchor` Werte weiterhin normalisiert im Bereich 0..1 zurück (x relativ zur Bildbreite, y relativ zur Bildhöhe). Wenn Produkt-Metadaten (Features, technische Daten, Beschreibung) bereitstehen, berücksichtige sie bei der Analyse und versuche relevante Eigenschaften visuell am Produkt zu verorten.
 
 DEINE AUFGABEN - SEHR DETAILLIERT:
 
@@ -509,31 +514,12 @@ ANTWORT FORMAT (JSON):
 
 
 def build_context_info(context: dict = None) -> str:
-    """Build context information string from context dict"""
+    """Return context info as formatted JSON block for prompts."""
     if not context:
-        return ""
+        return "(keine zusätzlichen Kontextdaten)"
 
-    context_parts = []
-
-    if "file_path" in context and context["file_path"]:
-        context_parts.append(f"File path: {context['file_path']}")
-
-    if "collection_id" in context and context["collection_id"]:
-        context_parts.append(f"Collection: {context['collection_id']}")
-
-    if "metadata" in context and context["metadata"]:
-        meta = context["metadata"]
-        if isinstance(meta, dict):
-            meta_str = ", ".join([f"{k}: {v}" for k, v in meta.items()])
-            context_parts.append(f"Metadata: {meta_str}")
-
-    if "role" in context and context["role"]:
-        context_parts.append(f"Role: {context['role']}")
-
-    if "context_text" in context and context["context_text"]:
-        context_parts.append(f"\nFree-form description:\n{context['context_text']}")
-
-    if context_parts:
-        return "\n\nContextual Information:\n" + "\n".join(context_parts) + "\n"
-
-    return ""
+    try:
+        return json.dumps(context, ensure_ascii=False, indent=2)
+    except Exception:
+        # Fallback: simple string representation
+        return str(context)

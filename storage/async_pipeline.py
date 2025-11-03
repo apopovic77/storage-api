@@ -12,13 +12,17 @@ import uuid
 import json
 import traceback
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from enum import Enum
 from dataclasses import dataclass, asdict
+from io import BytesIO
 
+import httpx
+from PIL import Image
 from sqlalchemy.orm import Session
+
+from config import settings
 from models import StorageObject, AsyncTask
-from datetime import datetime
 
 
 class TaskStatus(str, Enum):
@@ -238,7 +242,10 @@ class AsyncPipelineManager:
         db: Session = None,
         ai_tasks_str: Optional[str] = None,
         vision_mode: Optional[str] = None,
-        context_role: Optional[str] = None
+        context_role: Optional[str] = None,
+        context_overrides: Optional[Dict[str, Any]] = None,
+        trim_before_analysis: bool = False,
+        trim_delivery_default: bool = False,
     ) -> str:
         """
         Start a new async processing task.
@@ -259,6 +266,48 @@ class AsyncPipelineManager:
         except ValueError:
             analysis_mode = AnalysisMode.QUALITY
 
+        context_payload: Dict[str, Any] = {}
+        if db is not None:
+            try:
+                storage_obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+            except Exception:
+                storage_obj = None
+            if storage_obj is not None:
+                tenant = getattr(storage_obj, "tenant_id", None)
+                if not tenant:
+                    meta_json = getattr(storage_obj, "metadata_json", None) or {}
+                    tenant = meta_json.get("tenant_id", "arkturian")
+                context_payload = await self._build_analysis_context(storage_obj, tenant or "arkturian")
+
+        if context_overrides:
+            if not context_payload:
+                context_payload = {}
+
+            override_metadata = context_overrides.get("metadata")
+            if isinstance(override_metadata, dict):
+                existing_meta = context_payload.get("metadata")
+                if isinstance(existing_meta, dict):
+                    existing_meta.update(override_metadata)
+                else:
+                    context_payload["metadata"] = override_metadata
+
+            for key, value in context_overrides.items():
+                if key == "metadata":
+                    continue
+                context_payload[key] = value
+
+        config_dict = {
+            "ai_tasks": ai_tasks_str,
+            "vision_mode": vision_mode or "auto",
+            "context_role": context_role,
+            "trim": {
+                "enabled": bool(trim_before_analysis),
+                "delivery_default": bool(trim_delivery_default),
+            },
+        }
+        if context_payload:
+            config_dict["context"] = context_payload
+
         # Create task info
         task_info = TaskInfo(
             task_id=task_id,
@@ -266,11 +315,7 @@ class AsyncPipelineManager:
             status=TaskStatus.QUEUED,
             mode=analysis_mode,
             result={
-                "config": {
-                    "ai_tasks": ai_tasks_str,
-                    "vision_mode": vision_mode or "auto",
-                    "context_role": context_role,
-                }
+                "config": config_dict
             }
         )
 
@@ -312,15 +357,20 @@ class AsyncPipelineManager:
         attempt_log = []
         last_result: Optional[Dict[str, Any]] = None
 
+        trim_meta: Dict[str, Any] = {}
+
         for attempt in attempts:
             try:
-                data, data_mime = await load_image_bytes_for_analysis(
+                data, data_mime, prep_meta = await load_image_bytes_for_analysis(
                     storage_obj,
                     tenant_id,
                     max_edge=attempt["max_edge"],
                     target_format=attempt["target_format"],
                     quality=attempt["quality"],
+                    trim_config=cfg.get("trim"),
                 )
+                if prep_meta:
+                    trim_meta = prep_meta
             except Exception as exc:
                 attempt_log.append({**attempt, "status": "load_failed", "error": str(exc)})
                 last_result = {
@@ -333,7 +383,7 @@ class AsyncPipelineManager:
             result = await analyze_content(
                 data,
                 data_mime,
-                context=None,
+                context=cfg.get("context"),
                 vision_mode=cfg.get("vision_mode", "auto"),
                 ai_tasks_str=cfg.get("ai_tasks"),
                 context_role=cfg.get("context_role")
@@ -346,6 +396,7 @@ class AsyncPipelineManager:
                 "result_mode": result.get("mode"),
                 "result_category": result.get("category"),
                 "error": (result.get("embedding_info", {}) or {}).get("metadata", {}).get("error"),
+                "trim_applied": trim_meta.get("applied") if trim_meta else False,
             }
             attempt_log.append(attempt_entry)
 
@@ -365,7 +416,97 @@ class AsyncPipelineManager:
         metadata = embedding_info.setdefault("metadata", {}) or {}
         metadata["analysisAttempts"] = attempt_log
 
+        if trim_meta:
+            last_result.setdefault("trim_metadata", trim_meta)
+
         return last_result
+
+    async def _build_analysis_context(self, storage_obj: StorageObject, tenant_id: str) -> Dict[str, Any]:
+        """Gather contextual metadata and image information for prompting."""
+        context: Dict[str, Any] = {}
+
+        try:
+            meta_source = storage_obj.ai_context_metadata or {}
+
+            metadata_block: Dict[str, Any] = {}
+            base_metadata = meta_source.get("metadata")
+            if isinstance(base_metadata, dict):
+                metadata_block.update(base_metadata)
+
+            # Optional additional structured data (technical tables, features)
+            technical_data = meta_source.get("technical_data")
+            if technical_data:
+                metadata_block["technical_data"] = technical_data
+
+            features = meta_source.get("features")
+            if features:
+                metadata_block["features"] = features
+
+            description = meta_source.get("description")
+            if description:
+                metadata_block["description"] = description
+
+            if metadata_block:
+                context["metadata"] = metadata_block
+
+            context_text = meta_source.get("context_text")
+            if context_text:
+                context["context_text"] = context_text
+
+            width = getattr(storage_obj, "width", None)
+            height = getattr(storage_obj, "height", None)
+            if not width or not height:
+                width, height = await self._get_image_dimensions(storage_obj, tenant_id)
+
+            if width and height:
+                context.setdefault("image", {})
+                context["image"]["width_px"] = int(width)
+                context["image"]["height_px"] = int(height)
+
+        except Exception as exc:
+            self._log(f"Context build failed for object {getattr(storage_obj, 'id', 'unknown')}: {exc}")
+
+        return context
+
+    async def _get_image_dimensions(self, storage_obj: StorageObject, tenant_id: str) -> tuple[Optional[int], Optional[int]]:
+        """Derive natural image dimensions from local storage or remote URI."""
+        from storage.service import generic_storage
+
+        # Try local file first
+        try:
+            if getattr(storage_obj, "object_key", None):
+                path = generic_storage.absolute_path_for_key(storage_obj.object_key, tenant_id or "arkturian")
+                if path.exists():
+                    with Image.open(path) as img:
+                        return img.width, img.height
+        except Exception as exc:
+            self._log(f"Local dimension lookup failed: {exc}")
+
+        # External URI fallback
+        external_uri = getattr(storage_obj, "external_uri", None)
+        if external_uri:
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.get(external_uri)
+                    resp.raise_for_status()
+                    with Image.open(BytesIO(resp.content)) as img:
+                        return img.width, img.height
+            except Exception as exc:
+                self._log(f"External dimension lookup failed: {exc}")
+
+        # Storage media derivative fallback
+        base_url = settings.BASE_URL.rstrip("/")
+        media_url = f"{base_url}/storage/media/{getattr(storage_obj, 'id', '')}"
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(media_url)
+                resp.raise_for_status()
+                with Image.open(BytesIO(resp.content)) as img:
+                    return img.width, img.height
+        except Exception as exc:
+            self._log(f"Storage media dimension lookup failed: {exc}")
+
+        return None, None
 
     async def _process_task(self, task_id: str, db: Session):
         """
@@ -459,6 +600,8 @@ class AsyncPipelineManager:
 
         from ai_analysis.service import analyze_content
         cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
+        cfg_trim = (cfg.get("trim") or {}) if cfg else {}
+        cfg_trim = (cfg.get("trim") or {}) if cfg else {}
 
         if mime_type.lower().startswith("image/"):
             analysis_result = await self._run_image_analysis_with_retry(
@@ -483,7 +626,7 @@ class AsyncPipelineManager:
             analysis_result = await analyze_content(
                 data,
                 mime_type,
-                context=None,
+                context=cfg.get("context"),
                 vision_mode=cfg.get("vision_mode", "auto"),
                 ai_tasks_str=cfg.get("ai_tasks"),
                 context_role=cfg.get("context_role")
@@ -507,13 +650,21 @@ class AsyncPipelineManager:
         storage_obj.ai_collections = analysis_result.get("ai_collections", [])
 
         # Store extracted tags and embedding info for Knowledge Graph
-        if "extracted_tags" in analysis_result or "embedding_info" in analysis_result:
+        if "extracted_tags" in analysis_result or "embedding_info" in analysis_result or analysis_result.get("trim_metadata"):
             context_meta = storage_obj.ai_context_metadata.copy() if storage_obj.ai_context_metadata else {}
-            context_meta["extracted_tags"] = analysis_result.get("extracted_tags", {})
-            context_meta["embedding_info"] = analysis_result.get("embedding_info", {})
-            context_meta["mode"] = analysis_result.get("mode", "")
-            context_meta["prompt"] = analysis_result.get("prompt", "")
-            context_meta["response"] = analysis_result.get("ai_response", "")
+            if "extracted_tags" in analysis_result or "embedding_info" in analysis_result:
+                context_meta["extracted_tags"] = analysis_result.get("extracted_tags", {})
+                context_meta["embedding_info"] = analysis_result.get("embedding_info", {})
+                context_meta["mode"] = analysis_result.get("mode", "")
+                context_meta["prompt"] = analysis_result.get("prompt", "")
+                context_meta["response"] = analysis_result.get("ai_response", "")
+
+            trim_meta = analysis_result.get("trim_metadata")
+            if trim_meta:
+                context_meta["trim_bounds"] = trim_meta
+                if cfg_trim.get("delivery_default"):
+                    context_meta["trim_delivery_default"] = True
+
             storage_obj.ai_context_metadata = context_meta
 
         db.commit()
@@ -638,13 +789,21 @@ class AsyncPipelineManager:
         storage_obj.ai_collections = analysis_result.get("ai_collections", [])
 
         # Store extracted tags and embedding info for Knowledge Graph
-        if "extracted_tags" in analysis_result or "embedding_info" in analysis_result:
+        if "extracted_tags" in analysis_result or "embedding_info" in analysis_result or analysis_result.get("trim_metadata"):
             context_meta = storage_obj.ai_context_metadata.copy() if storage_obj.ai_context_metadata else {}
-            context_meta["extracted_tags"] = analysis_result.get("extracted_tags", {})
-            context_meta["embedding_info"] = analysis_result.get("embedding_info", {})
-            context_meta["mode"] = analysis_result.get("mode", "")
-            context_meta["prompt"] = analysis_result.get("prompt", "")
-            context_meta["response"] = analysis_result.get("ai_response", "")
+            if "extracted_tags" in analysis_result or "embedding_info" in analysis_result:
+                context_meta["extracted_tags"] = analysis_result.get("extracted_tags", {})
+                context_meta["embedding_info"] = analysis_result.get("embedding_info", {})
+                context_meta["mode"] = analysis_result.get("mode", "")
+                context_meta["prompt"] = analysis_result.get("prompt", "")
+                context_meta["response"] = analysis_result.get("ai_response", "")
+
+            trim_meta = analysis_result.get("trim_metadata")
+            if trim_meta:
+                context_meta["trim_bounds"] = trim_meta
+                if cfg_trim.get("delivery_default"):
+                    context_meta["trim_delivery_default"] = True
+
             storage_obj.ai_context_metadata = context_meta
 
         db.commit()

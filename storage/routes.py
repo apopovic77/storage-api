@@ -4,13 +4,14 @@ from fastapi.responses import FileResponse
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 import json
 import os
 import shutil
 import base64
 import subprocess
 from pathlib import Path
+from io import BytesIO
 
 from database import get_db
 from auth import get_current_user, get_current_user_optional, generate_api_key
@@ -1996,6 +1997,7 @@ def get_media_variant(
     height: Optional[int] = Query(None, ge=1),
     format: Optional[str] = Query(None, description="jpg | png | webp"),
     quality: Optional[int] = Query(None, ge=1, le=100),
+    trim: Optional[bool] = Query(None, description="Set true to crop using stored trim bounds (if available)"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
     tenant_id: Optional[str] = Depends(get_tenant_id_optional),
@@ -2015,6 +2017,23 @@ def get_media_variant(
         raise HTTPException(status_code=404, detail="Not found")
 
     mime = (obj.mime_type or "").lower()
+
+    context_meta = obj.ai_context_metadata or {}
+    stored_trim = None
+    trim_default = False
+    if isinstance(context_meta, dict):
+        stored_trim = context_meta.get("trim_bounds")
+        trim_default = bool(context_meta.get("trim_delivery_default"))
+
+    apply_trim = False
+    if stored_trim and stored_trim.get("applied"):
+        if trim is None:
+            apply_trim = trim_default
+        else:
+            apply_trim = bool(trim)
+    elif trim:
+        apply_trim = bool(trim) and bool(stored_trim)
+
     if not mime.startswith("image/"):
         # For non-images, return original file for now
         path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
@@ -2069,8 +2088,81 @@ def get_media_variant(
     else:
         thumb_path = generic_storage.thumbnails_dir / f"thumb_ext_{object_id}.jpg"
 
+    def serve_trimmed_image(
+        source_path: Path,
+        target_format_value: str,
+        quality_value: int,
+        target_max_edge: Optional[int],
+        requested_width: Optional[int],
+        requested_height: Optional[int],
+    ) -> Response:
+        if not stored_trim or not stored_trim.get("applied"):
+            return FileResponse(source_path, media_type=obj.mime_type, filename=obj.original_filename)
+
+        from PIL import Image
+
+        buffer = BytesIO()
+        with Image.open(source_path) as base_img:
+            base_width, base_height = base_img.size
+            normalized = stored_trim.get("normalized") or [0.0, 0.0, 1.0, 1.0]
+            if len(normalized) != 4:
+                normalized = [0.0, 0.0, 1.0, 1.0]
+            x1 = int(normalized[0] * base_width)
+            y1 = int(normalized[1] * base_height)
+            x2 = int(normalized[2] * base_width)
+            y2 = int(normalized[3] * base_height)
+            x1 = max(0, min(x1, base_width - 1))
+            y1 = max(0, min(y1, base_height - 1))
+            x2 = max(x1 + 1, min(x2, base_width))
+            y2 = max(y1 + 1, min(y2, base_height))
+
+            img = base_img.crop((x1, y1, x2, y2))
+            w, h = img.size
+
+            if requested_width and requested_height:
+                target_w, target_h = requested_width, requested_height
+            elif target_max_edge:
+                if w >= h:
+                    target_w = min(target_max_edge, w)
+                    target_h = int(h * (target_w / float(w))) if w else h
+                else:
+                    target_h = min(target_max_edge, h)
+                    target_w = int(w * (target_h / float(h))) if h else w
+            else:
+                target_w, target_h = w, h
+
+            if target_w > 0 and target_h > 0 and (target_w != w or target_h != h):
+                img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            save_format = {
+                "jpg": "JPEG",
+                "jpeg": "JPEG",
+                "png": "PNG",
+                "webp": "WEBP",
+            }.get(target_format_value, "PNG")
+
+            media_type_map = {
+                "JPEG": "image/jpeg",
+                "PNG": "image/png",
+                "WEBP": "image/webp",
+            }
+            media_type = media_type_map.get(save_format, "image/png")
+
+            save_kwargs: Dict[str, Any] = {}
+            if save_format == "JPEG":
+                if img.mode in {"RGBA", "LA", "P"}:
+                    img = img.convert("RGB")
+                save_kwargs = {"quality": quality_value, "optimize": True}
+            elif save_format == "WEBP":
+                save_kwargs = {"quality": quality_value, "method": 6}
+
+            img.save(buffer, format=save_format, **save_kwargs)
+
+        buffer.seek(0)
+        return Response(content=buffer.getvalue(), media_type=media_type)
+
     # Default: if no hints provided, return original (full)
-    if variant is None and display_for is None and not width and not height:
+    if not apply_trim and variant is None and display_for is None and not width and not height:
         return FileResponse(src_path, media_type=obj.mime_type, filename=obj.original_filename)
 
     # Derive a deterministic webview name for medium/custom
@@ -2090,12 +2182,14 @@ def get_media_variant(
     max_edge = None
     if variant == "thumbnail":
         # Serve existing thumbnail
-        if thumb_path.exists():
+        if not apply_trim and thumb_path.exists():
             return FileResponse(thumb_path, media_type="image/jpeg", filename=thumb_path.name)
         # Fallback: generate on-the-fly
         max_edge = 300
     elif variant == "full":
-        return FileResponse(src_path, media_type=obj.mime_type, filename=obj.original_filename)
+        if not apply_trim:
+            return FileResponse(src_path, media_type=obj.mime_type, filename=obj.original_filename)
+        max_edge = None
     else:
         # medium or custom
         max_edge = 1920 if variant == "medium" or variant is None else 1920
@@ -2104,10 +2198,16 @@ def get_media_variant(
         if width or height:
             max_edge = max(width or 0, height or 0) or max_edge
 
+    if apply_trim and variant is None and display_for is None and not width and not height:
+        max_edge = None
+
     # Prepare destination path for derivative
     suffix = "jpg" if target_format in {"jpg", "jpeg"} else target_format
     dest_name = f"web_{base_name}_{max_edge}e_q{q}.{suffix}"
     dest_path = generic_storage.webview_dir / dest_name
+
+    if apply_trim:
+        return serve_trimmed_image(src_path, target_format, q, max_edge, width, height)
 
     # If derivative exists, serve it
     if dest_path.exists():
@@ -2954,6 +3054,10 @@ async def analyze_async(
     ai_tasks: Optional[str] = Query(None, description="CSV/JSON list: safety,vision,product,embedding,kg,notify"),
     ai_vision_mode: Optional[str] = Query(None, description="auto|generic|product"),
     ai_context_role: Optional[str] = Query(None, description="product|lifestyle|doc|other"),
+    ai_context_text: Optional[str] = Query(None, description="Optional free-text context for AI"),
+    ai_metadata: Optional[str] = Query(None, description="JSON with domain metadata (e.g., brand, model, specs, features)"),
+    trim_before_analysis: bool = Query(False, description="If true, crop transparent/empty borders before AI analysis."),
+    trim_delivery_default: bool = Query(False, description="If true, prefer delivering trimmed media variants by default."),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
@@ -2982,6 +3086,39 @@ async def analyze_async(
     if storage_obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    # Prepare context overrides (metadata, descriptions, etc.)
+    context_overrides: Dict[str, Any] = {}
+    metadata_payload: Optional[Dict[str, Any]] = None
+
+    if ai_metadata:
+        try:
+            metadata_payload = json.loads(ai_metadata)
+            if isinstance(metadata_payload, dict):
+                context_overrides["metadata"] = metadata_payload
+        except Exception:
+            metadata_payload = None
+
+    if ai_context_text:
+        context_overrides["context_text"] = ai_context_text
+
+    # Persist metadata/context for future synchronous runs
+    if context_overrides:
+        context_meta = storage_obj.ai_context_metadata.copy() if storage_obj.ai_context_metadata else {}
+
+        if "metadata" in context_overrides and isinstance(context_overrides["metadata"], dict):
+            existing_meta = context_meta.get("metadata")
+            if isinstance(existing_meta, dict):
+                existing_meta.update(context_overrides["metadata"])
+            else:
+                context_meta["metadata"] = context_overrides["metadata"]
+
+        if "context_text" in context_overrides:
+            context_meta["context_text"] = context_overrides["context_text"]
+
+        storage_obj.ai_context_metadata = context_meta
+        db.commit()
+        db.refresh(storage_obj)
+
     # Start async task
     from storage.async_pipeline import pipeline_manager
 
@@ -2992,6 +3129,9 @@ async def analyze_async(
         ai_tasks_str=ai_tasks,
         vision_mode=ai_vision_mode,
         context_role=ai_context_role,
+        context_overrides=context_overrides if context_overrides else None,
+        trim_before_analysis=trim_before_analysis,
+        trim_delivery_default=trim_delivery_default,
     )
 
     return {

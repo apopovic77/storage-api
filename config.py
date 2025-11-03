@@ -58,6 +58,10 @@ class Settings:
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
     API_KEY: str = os.getenv("API_KEY", "Inetpass1")
+
+    # External APIs
+    ONEAL_API_BASE: str = os.getenv("ONEAL_API_BASE", "https://oneal-api.arkturian.com")
+    ONEAL_API_KEY: Optional[str] = os.getenv("ONEAL_API_KEY", "oneal_demo_token")
     
     # User Settings
     NEW_USER_TRUST_LEVEL: str = os.getenv("NEW_USER_TRUST_LEVEL", "user")
