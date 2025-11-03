@@ -602,6 +602,7 @@ class AsyncPipelineManager:
         cfg = (task_info.result or {}).get("config", {}) if task_info.result else {}
         cfg_trim = (cfg.get("trim") or {}) if cfg else {}
         cfg_trim = (cfg.get("trim") or {}) if cfg else {}
+        cfg_trim = (cfg.get("trim") or {}) if cfg else {}
 
         if mime_type.lower().startswith("image/"):
             analysis_result = await self._run_image_analysis_with_retry(
