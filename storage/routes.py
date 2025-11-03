@@ -15,7 +15,7 @@ from io import BytesIO
 
 from database import get_db
 from auth import get_current_user, get_current_user_optional, generate_api_key
-from models import StorageObject, StorageObjectResponse, StorageListResponse, User
+from models import StorageObject, StorageObjectResponse, StorageListResponse, User, AsyncTask
 from ai_analysis import analyze_content
 from config import settings
 from pydantic import BaseModel
@@ -2715,6 +2715,14 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
         print(f"🗑️  Deleted embedding for storage object {obj.id}")
     except Exception as e:
         print(f"Warning: Could not delete embedding for object {obj.id}: {e}")
+
+    # Delete pending async tasks referencing this object
+    try:
+        deleted_tasks = db.query(AsyncTask).filter(AsyncTask.object_id == obj.id).delete(synchronize_session=False)
+        if deleted_tasks:
+            print(f"🗑️  Deleted {deleted_tasks} async task(s) for object {obj.id}")
+    except Exception as e:
+        print(f"Warning: Could not delete async tasks for object {obj.id}: {e}")
 
     # Delete physical file (only if not external/reference mode)
     if obj.storage_mode not in ["external", "reference"]:
