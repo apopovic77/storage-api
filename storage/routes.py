@@ -43,6 +43,8 @@ class BulkDeleteRequest(BaseModel):
 
 class TenantDeleteRequest(BaseModel):
     tenant_id: str
+    batch_size: Optional[int] = 100
+    dry_run: bool = False
 
 
 class SimilarityResponse(BaseModel):
@@ -792,8 +794,8 @@ def bulk_delete_filtered_objects(
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 
-@router.post("/admin/delete-tenant")
-def delete_tenant_objects(
+@router.post("/admin/clean-tenant")
+def clean_tenant_objects_endpoint(
     payload: TenantDeleteRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -801,11 +803,39 @@ def delete_tenant_objects(
     if current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    try:
-        deleted = bulk_delete_objects(db, tenant_id=payload.tenant_id, current_user=current_user)
-        return {"tenant_id": payload.tenant_id, "deleted_count": deleted, "message": f"Deleted {deleted} objects for tenant {payload.tenant_id}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete tenant objects: {e}")
+    result = _clean_tenant_objects(
+        db,
+        payload.tenant_id,
+        current_user,
+        batch_size=payload.batch_size or 100,
+        dry_run=payload.dry_run,
+    )
+    result.setdefault(
+        "message",
+        "Dry run complete. No data deleted." if payload.dry_run else "Tenant cleaned successfully.",
+    )
+    return result
+
+
+@router.post("/admin/delete-tenant")
+def delete_tenant_objects(
+    payload: TenantDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Deprecated: use /storage/admin/clean-tenant."""
+    if current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    result = _clean_tenant_objects(
+        db,
+        payload.tenant_id,
+        current_user,
+        batch_size=payload.batch_size or 100,
+        dry_run=payload.dry_run,
+    )
+    result["message"] = "Deprecated endpoint. Use /storage/admin/clean-tenant."
+    return result
 
 
 # --- Admin Cleanup Models ---
@@ -2692,6 +2722,89 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
     db.delete(obj)
     db.commit()
     return {"message": "deleted", "cascade_deleted": len(linked_children) if linked_children else 0}
+
+
+def _clean_tenant_objects(
+    db: Session,
+    tenant_id: str,
+    current_user: User,
+    *,
+    batch_size: int = 100,
+    dry_run: bool = False,
+) -> dict:
+    """Iteratively delete all storage objects for a tenant using the robust single-object delete path."""
+    if batch_size <= 0:
+        batch_size = 100
+
+    total_objects = db.query(func.count(StorageObject.id)).filter(StorageObject.tenant_id == tenant_id).scalar() or 0
+
+    if dry_run:
+        sample_ids = [
+            row[0]
+            for row in (
+                db.query(StorageObject.id)
+                .filter(StorageObject.tenant_id == tenant_id)
+                .order_by(StorageObject.id)
+                .limit(min(batch_size, 20))
+                .all()
+            )
+        ]
+        return {
+            "tenant_id": tenant_id,
+            "dry_run": True,
+            "total_objects": total_objects,
+            "sample_ids": sample_ids,
+            "message": "Dry run complete. No data was deleted.",
+        }
+
+    deleted = 0
+    errors = []
+
+    while True:
+        ids = [
+            row[0]
+            for row in (
+                db.query(StorageObject.id)
+                .filter(StorageObject.tenant_id == tenant_id)
+                .order_by(StorageObject.id)
+                .limit(batch_size)
+                .all()
+            )
+        ]
+
+        if not ids:
+            break
+
+        deleted_this_batch = 0
+        for object_id in ids:
+            try:
+                _perform_delete(object_id, db, current_user.id, is_admin=True)
+                deleted += 1
+                deleted_this_batch += 1
+            except HTTPException as exc:
+                db.rollback()
+                errors.append({"object_id": object_id, "error": exc.detail})
+            except Exception as exc:
+                db.rollback()
+                errors.append({"object_id": object_id, "error": str(exc)})
+
+        if deleted_this_batch == 0:
+            # Avoid infinite loop if nothing could be deleted (likely due to constraints)
+            break
+
+        # Refresh session state before next batch
+        db.expire_all()
+
+    remaining = db.query(func.count(StorageObject.id)).filter(StorageObject.tenant_id == tenant_id).scalar() or 0
+
+    return {
+        "tenant_id": tenant_id,
+        "dry_run": False,
+        "total_objects_before": total_objects,
+        "deleted": deleted,
+        "remaining": remaining,
+        "errors": errors[:20],
+    }
 
 
 @router.delete("/{object_id}")
