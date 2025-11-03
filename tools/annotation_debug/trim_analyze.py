@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--context-role", default="product", help="Context role hint for AI")
     parser.add_argument("--metadata-json", default=None, help="Extra JSON metadata for the AI prompt")
-    parser.add_argument("--save", type=Path, default=None, help="Optional path to save trimmed PNG")
+    parser.add_argument("--save", type=Path, default=None, help="Optional path to save trimmed PNG (defaults to trimmed_<object_id>.png)")
     return parser.parse_args()
 
 
@@ -147,9 +147,13 @@ def main() -> None:
     trimmed, bbox = trimmed_image(img)
     print(f"Trimmed visible bounds: x:[{bbox[0]},{bbox[2]}) y:[{bbox[1]},{bbox[3]})")
     if args.save:
-        args.save.parent.mkdir(parents=True, exist_ok=True)
-        trimmed.save(args.save)
-        print(f"Saved trimmed PNG to {args.save.resolve()}")
+        save_path = args.save
+    else:
+        save_path = Path(f"trimmed_{args.object_id}.png")
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    trimmed.save(save_path)
+    print(f"Saved trimmed PNG to {save_path.resolve()}")
 
     print("Uploading trimmed image as temporary object…")
     temp_id = upload_temp(base, args.api_key, trimmed, origin)
