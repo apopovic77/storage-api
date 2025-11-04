@@ -332,8 +332,15 @@ class AnnotationGUI:
     def on_load_product_specs(self) -> None:
         product_id = self.product_id_entry.get().strip()
         if not product_id:
-            messagebox.showerror("Fehlende Produkt-ID", "Bitte eine Product ID eingeben.")
-            return
+            fallback = self.object_entry.get().strip()
+            if fallback:
+                product_id = fallback
+                self.product_id_entry.delete(0, tk.END)
+                self.product_id_entry.insert(0, fallback)
+                self.log(f"Product ID leer – verwende Object ID {fallback} als Fallback.")
+            else:
+                messagebox.showerror("Fehlende Produkt-ID", "Bitte eine Product ID eingeben.")
+                return
 
         base = self.product_base_entry.get().strip() or self.product_api_base
         key = self.product_api_key_entry.get().strip() or self.default_api_key
