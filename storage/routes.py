@@ -2069,7 +2069,7 @@ def get_media_variant(
         path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
         if not path.exists():
             raise HTTPException(status_code=404, detail="File missing")
-        return FileResponse(path, media_type=obj.mime_type, filename=obj.original_filename)
+        return FileResponse(path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
 
     # Compute source paths
     # Try local file first
@@ -2125,7 +2125,11 @@ def get_media_variant(
         requested_height: Optional[int],
     ) -> Response:
         if not stored_trim or not stored_trim.get("applied"):
-            return FileResponse(source_path, media_type=obj.mime_type, filename=obj.original_filename)
+            return FileResponse(
+                source_path,
+                media_type=obj.mime_type,
+                headers={"Content-Disposition": "inline"},
+            )
 
         from PIL import Image
 
@@ -2191,7 +2195,7 @@ def get_media_variant(
 
     # Default: if no hints provided, return original (full)
     if not apply_trim and variant is None and display_for is None and not width and not height:
-        return FileResponse(src_path, media_type=obj.mime_type, filename=obj.original_filename)
+        return FileResponse(src_path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
 
     # Derive a deterministic webview name for medium/custom
     if obj.object_key:
@@ -2211,12 +2215,12 @@ def get_media_variant(
     if variant == "thumbnail":
         # Serve existing thumbnail
         if not apply_trim and thumb_path.exists():
-            return FileResponse(thumb_path, media_type="image/jpeg", filename=thumb_path.name)
+            return FileResponse(thumb_path, media_type="image/jpeg", headers={"Content-Disposition": "inline"})
         # Fallback: generate on-the-fly
         max_edge = 300
     elif variant == "full":
         if not apply_trim:
-            return FileResponse(src_path, media_type=obj.mime_type, filename=obj.original_filename)
+            return FileResponse(src_path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
         max_edge = None
     else:
         # medium or custom
@@ -2245,7 +2249,7 @@ def get_media_variant(
             "png": "image/png",
             "webp": "image/webp",
         }.get(suffix, "image/jpeg")
-        return FileResponse(dest_path, media_type=media_type, filename=dest_path.name)
+        return FileResponse(dest_path, media_type=media_type, headers={"Content-Disposition": "inline"})
 
     # Generate derivative and persist
     try:
@@ -2283,7 +2287,7 @@ def get_media_variant(
         "png": "image/png",
         "webp": "image/webp",
     }.get(suffix, "image/jpeg")
-    return FileResponse(dest_path, media_type=media_type, filename=dest_path.name)
+    return FileResponse(dest_path, media_type=media_type, headers={"Content-Disposition": "inline"})
 
 
 @router.get("/proxy")
@@ -2606,7 +2610,7 @@ def download_file(
         raise HTTPException(status_code=404, detail="File missing")
     obj.download_count = (obj.download_count or 0) + 1
     db.commit()
-    return FileResponse(path, media_type=obj.mime_type, filename=obj.original_filename)
+    return FileResponse(path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
 
 
 @router.post("/objects/{object_id}/like", response_model=StorageObjectResponse)
