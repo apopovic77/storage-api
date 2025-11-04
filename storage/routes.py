@@ -2089,10 +2089,8 @@ def get_media_variant(
         # Check if cached (24h TTL)
         use_cache = False
         if cache_file.exists():
-            age = time.time() - cache_file.stat().st_mtime
-            if age < 86400:  # 24 hours
-                use_cache = True
-                src_path = cache_file
+            # Disable caching to always fetch the latest external asset
+            use_cache = False
 
         # Download if not cached
         if not use_cache:
