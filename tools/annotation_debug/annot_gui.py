@@ -38,6 +38,8 @@ class AnnotationGUI:
     def __init__(self, api_key: str, base_url: str):
         self.default_api_key = api_key
         self.default_base_url = base_url.rstrip("/")
+        self.product_metadata: Optional[Dict[str, Any]] = None
+        self.product_api_base = "https://api.oneal.eu/v1"
 
         self.root = tk.Tk()
         self.root.title("Storage Annotation GUI")
@@ -73,6 +75,25 @@ class AnnotationGUI:
         self.api_key_entry.insert(0, self.default_api_key or "")
         self.base_entry.insert(0, self.default_base_url)
 
+        product_bar = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        product_bar.pack(fill=tk.X)
+
+        ttk.Label(product_bar, text="Product ID").grid(row=0, column=0, sticky=tk.W)
+        self.product_id_entry = ttk.Entry(product_bar, width=18)
+        self.product_id_entry.grid(row=0, column=1, padx=(5, 12))
+
+        ttk.Label(product_bar, text="Product API Base").grid(row=0, column=2, sticky=tk.W)
+        self.product_base_entry = ttk.Entry(product_bar, width=34)
+        self.product_base_entry.grid(row=0, column=3, padx=(5, 12))
+        self.product_base_entry.insert(0, self.product_api_base)
+
+        ttk.Label(product_bar, text="Product API Key").grid(row=0, column=4, sticky=tk.W)
+        self.product_api_key_entry = ttk.Entry(product_bar, width=32)
+        self.product_api_key_entry.grid(row=0, column=5, padx=(5, 12))
+        self.product_api_key_entry.insert(0, self.default_api_key or "")
+
+        ttk.Button(product_bar, text="Load Product Specs", command=self.on_load_product_specs).grid(row=0, column=6)
+
         buttons = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         buttons.pack(fill=tk.X)
 
@@ -88,6 +109,10 @@ class AnnotationGUI:
 
         side = ttk.Frame(main, width=360)
         side.pack(side=tk.RIGHT, fill=tk.BOTH)
+
+        ttk.Label(side, text="Product Metadata (context)").pack(anchor=tk.W)
+        self.metadata_box = ScrolledText(side, width=42, height=10)
+        self.metadata_box.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
 
         ttk.Label(side, text="Annotations").pack(anchor=tk.W)
         self.annotations_box = ScrolledText(side, width=42, height=12)
@@ -149,26 +174,59 @@ class AnnotationGUI:
 
     def _fetch_image(self, object_id: int) -> Image.Image:
         base_url = self._base_url()
-        attempt_specs = [
+        specs = [
             "trim=true&width=1400&format=webp&quality=80",
             "trim=true&width=1200&format=jpeg&quality=85",
+            "trim=true&width=900&format=jpeg&quality=85",
+            "trim=true&width=720&format=jpeg&quality=80",
             "trim=true",
         ]
 
         last_exc: Optional[Exception] = None
-        for spec in attempt_specs:
-            img_url = f"{base_url}/storage/media/{object_id}?{spec}&_={int(time.time())}"
+
+        def _download(url: str, headers: Optional[Dict[str, str]] = None) -> bytes:
+            resp = requests.get(url, headers=headers or {}, timeout=(20, 180), stream=True)
+            resp.raise_for_status()
+            chunks: List[bytes] = []
+            for chunk in resp.iter_content(65536):
+                if chunk:
+                    chunks.append(chunk)
+            data = b"".join(chunks)
+            if not data:
+                raise RuntimeError("empty image response")
+            return data
+
+        for spec in specs:
+            url = f"{base_url}/storage/media/{object_id}?{spec}&_={int(time.time())}"
             try:
-                resp = requests.get(img_url, headers=self._headers(), timeout=(15, 90), stream=True)
-                resp.raise_for_status()
-                data = resp.content
-                if not data:
-                    raise RuntimeError("empty image response")
-                image = Image.open(BytesIO(data)).convert("RGBA")
-                return image
+                data = _download(url, headers=self._headers())
+                return Image.open(BytesIO(data)).convert("RGBA")
             except Exception as exc:  # pylint: disable=broad-except
                 last_exc = exc
                 self.log(f"Bild-Download fehlgeschlagen ({spec}): {exc}")
+
+        # Try external fallbacks using object metadata (file_url / external_uri)
+        try:
+            obj = self.current_object or self._fetch_json(f"/storage/objects/{object_id}")
+        except Exception as exc:  # pylint: disable=broad-except
+            obj = None
+            last_exc = exc
+
+        if obj:
+            candidates = []
+            for key in ("webview_url", "file_url", "external_uri"):
+                value = obj.get(key)
+                if value:
+                    candidates.append((key, value))
+
+            for label, url in candidates:
+                try:
+                    data = _download(url)
+                    self.log(f"Bild über {label} geladen.")
+                    return Image.open(BytesIO(data)).convert("RGBA")
+                except Exception as exc:  # pylint: disable=broad-except
+                    last_exc = exc
+                    self.log(f"Fallback {label} fehlgeschlagen: {exc}")
 
         raise RuntimeError("Bild konnte nicht geladen werden") from last_exc
 
@@ -219,6 +277,8 @@ class AnnotationGUI:
         if object_id is None:
             return
 
+        metadata_payload = self._resolve_metadata_context()
+
         def worker():
             try:
                 self.log("Starte Analyse über /analyze-async…")
@@ -227,6 +287,16 @@ class AnnotationGUI:
                     "mode=quality&ai_tasks=vision,embedding,kg&"
                     "ai_vision_mode=product&ai_context_role=product"
                 )
+                if metadata_payload is not None:
+                    try:
+                        import json as _json
+                        from urllib.parse import quote_plus
+
+                        meta_json = _json.dumps(metadata_payload, ensure_ascii=False)
+                        route += f"&ai_metadata={quote_plus(meta_json)}"
+                    except Exception as exc:  # pylint: disable=broad-except
+                        self.log(f"Konnte ai_metadata nicht serialisieren: {exc}")
+
                 result = self._post_json(route)
                 task_id = result.get("task_id")
                 if not task_id:
@@ -256,6 +326,36 @@ class AnnotationGUI:
                 self._update_ui(image, annotations)
             except Exception as exc:  # pylint: disable=broad-except
                 self._handle_error("Analyse fehlgeschlagen", exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_load_product_specs(self) -> None:
+        product_id = self.product_id_entry.get().strip()
+        if not product_id:
+            messagebox.showerror("Fehlende Produkt-ID", "Bitte eine Product ID eingeben.")
+            return
+
+        base = self.product_base_entry.get().strip() or self.product_api_base
+        key = self.product_api_key_entry.get().strip() or self.default_api_key
+
+        def worker():
+            try:
+                url = f"{base.rstrip('/')}/products/{product_id}?format=resolved"
+                headers = {"X-API-Key": key} if key else {}
+                resp = requests.get(url, headers=headers, timeout=45)
+                resp.raise_for_status()
+                product = resp.json()
+                metadata = self._build_product_metadata(product)
+                self.product_metadata = metadata
+                import json as _json
+
+                self.metadata_box.delete("1.0", tk.END)
+                self.metadata_box.insert(tk.END, _json.dumps(metadata, ensure_ascii=False, indent=2))
+                specs_count = len(metadata.get("specifications", []))
+                features_count = len(metadata.get("features", []))
+                self.log(f"Produkt {product_id} geladen – {specs_count} Spezifikationen, {features_count} Features.")
+            except Exception as exc:  # pylint: disable=broad-except
+                self._handle_error("Product Specs laden fehlgeschlagen", exc)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -367,6 +467,79 @@ class AnnotationGUI:
             y1, y2 = 0.0, 1.0
 
         return x1, y1, x2, y2
+
+    def _resolve_metadata_context(self) -> Optional[Dict[str, Any]]:
+        raw = self.metadata_box.get("1.0", tk.END).strip()
+        if raw:
+            try:
+                import json as _json
+
+                parsed = _json.loads(raw)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception as exc:  # pylint: disable=broad-except
+                self.log(f"Metadata JSON ungültig: {exc}")
+        return self.product_metadata
+
+    def _build_product_metadata(self, product: Dict[str, Any]) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {
+            "product": {
+                "id": product.get("id"),
+                "name": product.get("name"),
+                "brand": product.get("brand"),
+                "category_ids": product.get("category_ids"),
+                "sku": product.get("sku") or product.get("slug"),
+            }
+        }
+
+        specs: List[Dict[str, Any]] = []
+        for item in (product.get("specifications") or []):
+            label = item.get("label") or item.get("name")
+            value = item.get("value")
+            if not label or value is None:
+                continue
+            entry: Dict[str, Any] = {"label": label, "value": value}
+            unit = item.get("unit")
+            if unit:
+                entry["unit"] = unit
+            specs.append(entry)
+        if specs:
+            metadata["specifications"] = specs
+
+        features: List[Dict[str, Any]] = []
+        for source in (product.get("technical_details") or []):
+            if isinstance(source, str):
+                features.append({"label": source})
+            elif isinstance(source, dict):
+                label = source.get("label") or source.get("title")
+                description = source.get("description") or source.get("text")
+                if label:
+                    entry = {"label": label}
+                    if description:
+                        entry["description"] = description
+                    features.append(entry)
+        for source in (product.get("features") or []):
+            if isinstance(source, str):
+                features.append({"label": source})
+            elif isinstance(source, dict):
+                label = source.get("label") or source.get("name")
+                if not label:
+                    continue
+                entry = {"label": label}
+                description = source.get("description")
+                if description:
+                    entry["description"] = description
+                features.append(entry)
+        if features:
+            metadata["features"] = features
+
+        expected = [item.get("label") for item in features if item.get("label")]
+        metadata["vision_objectives"] = {
+            "instructions": "Locate and describe each listed product feature or specification within the image using precise pixel anchors.",
+            "expected_outputs": expected[:20],
+        }
+
+        return metadata
 
     def _update_annotation_list(self) -> None:
         self.annotations_box.delete("1.0", tk.END)
