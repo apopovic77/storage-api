@@ -43,6 +43,7 @@ class WarmupConfig:
     format: str = "webp"
     quality_small: int = 75
     quality_large: int = 85
+    mine_only: bool = True
 
 
 def parse_args() -> WarmupConfig:
@@ -56,6 +57,7 @@ def parse_args() -> WarmupConfig:
     parser.add_argument("--timeout", type=float, default=180.0, help="Total timeout per request (seconds)")
     parser.add_argument("--connect-timeout", type=float, default=30.0, help="Connection timeout (seconds)")
     parser.add_argument("--no-refresh", action="store_true", help="Skip refresh=true (will use cached versions)")
+    parser.add_argument("--all-objects", action="store_true", help="Warm all objects (mine=false). Default: current tenant only.")
 
     args = parser.parse_args()
 
@@ -70,6 +72,7 @@ def parse_args() -> WarmupConfig:
         connect_timeout=args.connect_timeout,
         retry_limit=max(1, args.retry_limit),
         widths=widths,
+        mine_only=not args.all_objects,
     )
     cfg.refresh = not args.no_refresh  # type: ignore[attr-defined]
     return cfg
@@ -80,7 +83,7 @@ async def iter_object_ids(client: httpx.AsyncClient, cfg: WarmupConfig) -> Async
     total = None
     while True:
         params = {
-            "mine": "false",
+            "mine": "true" if cfg.mine_only else "false",
             "limit": cfg.page_size,
             "offset": offset,
             "_": int(time.time()),
