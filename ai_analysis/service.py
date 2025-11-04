@@ -485,14 +485,15 @@ async def _analyze_vision_comprehensive(
     payload = {"prompt": {"text": prompt_text, "images": images_list}}
     headers = {"X-API-KEY": INTERNAL_API_KEY, "Content-Type": "application/json"}
 
-    async with httpx.AsyncClient() as client:
+    timeout = httpx.Timeout(120.0, connect=30.0, read=120.0, write=120.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             print("🎨 Starting comprehensive vision analysis...", flush=True)
             response = await client.post(
                 f"{API_BASE_URL}/ai/gemini",
                 json=payload,
                 headers=headers,
-                timeout=60.0  # Vision analysis should be faster than CSV
+                timeout=timeout
             )
             response.raise_for_status()
 
