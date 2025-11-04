@@ -148,10 +148,29 @@ class AnnotationGUI:
         return resp.json()
 
     def _fetch_image(self, object_id: int) -> Image.Image:
-        img_url = f"{self._base_url()}/storage/media/{object_id}?trim=true&_={int(time.time())}"
-        resp = requests.get(img_url, headers=self._headers(), timeout=60)
-        resp.raise_for_status()
-        return Image.open(BytesIO(resp.content)).convert("RGBA")
+        base_url = self._base_url()
+        attempt_specs = [
+            "trim=true&width=1400&format=webp&quality=80",
+            "trim=true&width=1200&format=jpeg&quality=85",
+            "trim=true",
+        ]
+
+        last_exc: Optional[Exception] = None
+        for spec in attempt_specs:
+            img_url = f"{base_url}/storage/media/{object_id}?{spec}&_={int(time.time())}"
+            try:
+                resp = requests.get(img_url, headers=self._headers(), timeout=(15, 90), stream=True)
+                resp.raise_for_status()
+                data = resp.content
+                if not data:
+                    raise RuntimeError("empty image response")
+                image = Image.open(BytesIO(data)).convert("RGBA")
+                return image
+            except Exception as exc:  # pylint: disable=broad-except
+                last_exc = exc
+                self.log(f"Bild-Download fehlgeschlagen ({spec}): {exc}")
+
+        raise RuntimeError("Bild konnte nicht geladen werden") from last_exc
 
     # ----------------------------------------------------------- operations
     def on_load(self) -> None:
