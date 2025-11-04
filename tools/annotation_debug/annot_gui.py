@@ -111,23 +111,23 @@ class AnnotationGUI:
         side.pack(side=tk.RIGHT, fill=tk.BOTH)
 
         ttk.Label(side, text="Product Metadata (context)").pack(anchor=tk.W)
-        self.metadata_box = ScrolledText(side, width=42, height=10)
+        self.metadata_box = ScrolledText(side, width=64, height=10)
         self.metadata_box.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
 
         ttk.Label(side, text="Annotations").pack(anchor=tk.W)
-        self.annotations_box = ScrolledText(side, width=42, height=12)
+        self.annotations_box = ScrolledText(side, width=64, height=12)
         self.annotations_box.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
 
         ttk.Label(side, text="Prompt").pack(anchor=tk.W)
-        self.prompt_box = ScrolledText(side, width=42, height=10)
+        self.prompt_box = ScrolledText(side, width=64, height=10)
         self.prompt_box.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
 
         ttk.Label(side, text="AI Response").pack(anchor=tk.W)
-        self.response_box = ScrolledText(side, width=42, height=10)
+        self.response_box = ScrolledText(side, width=64, height=10)
         self.response_box.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
 
         ttk.Label(side, text="Log").pack(anchor=tk.W)
-        self.log_box = ScrolledText(side, width=42, height=8)
+        self.log_box = ScrolledText(side, width=64, height=8)
         self.log_box.pack(fill=tk.BOTH, expand=True)
 
     # -------------------------------------------------------------- helpers
