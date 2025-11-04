@@ -2028,6 +2028,7 @@ def get_media_variant(
     format: Optional[str] = Query(None, description="jpg | png | webp"),
     quality: Optional[int] = Query(None, ge=1, le=100),
     trim: Optional[bool] = Query(None, description="Set true to crop using stored trim bounds (if available)"),
+    refresh: bool = Query(False, description="When true, clears cached derivatives before rendering"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
     tenant_id: Optional[str] = Depends(get_tenant_id_optional),
@@ -2085,6 +2086,12 @@ def get_media_variant(
         cache_dir = Path("/tmp/share_proxy_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / f"obj_{object_id}"
+
+        # Explicit cache invalidation if requested
+        if refresh:
+            cache_file.unlink(missing_ok=True)
+            meta_candidate = cache_dir / f"obj_{object_id}.meta"
+            meta_candidate.unlink(missing_ok=True)
 
         # Check if cached (24h TTL)
         use_cache = False
@@ -2206,6 +2213,20 @@ def get_media_variant(
         ext = ".jpg"
         base_name = f"ext_{object_id}"
 
+    if refresh:
+        derivative_prefix = f"web_{base_name}"
+        derivative_dirs = {generic_storage.webview_dir}
+        if obj.tenant_id:
+            derivative_dirs.add(generic_storage.webview_dir / obj.tenant_id)
+        for derivative_dir in derivative_dirs:
+            if not derivative_dir.exists():
+                continue
+            for cached_variant in derivative_dir.glob(f"{derivative_prefix}*"):
+                try:
+                    cached_variant.unlink()
+                except Exception:
+                    pass
+
     # Heuristics for target size/format
     target_format = (format or ("webp" if mime != "image/png" else "png")).lower()
     if target_format not in {"jpg", "jpeg", "png", "webp"}:
@@ -2237,6 +2258,9 @@ def get_media_variant(
     suffix = "jpg" if target_format in {"jpg", "jpeg"} else target_format
     dest_name = f"web_{base_name}_{max_edge}e_q{q}.{suffix}"
     dest_path = generic_storage.webview_dir / dest_name
+
+    if refresh and dest_path.exists():
+        dest_path.unlink(missing_ok=True)
 
     if apply_trim:
         return serve_trimmed_image(src_path, target_format, q, max_edge, width, height)
