@@ -39,7 +39,7 @@ class AnnotationGUI:
         self.default_api_key = api_key
         self.default_base_url = base_url.rstrip("/")
         self.product_metadata: Optional[Dict[str, Any]] = None
-        self.product_api_base = "https://api.oneal.eu/v1"
+        self.product_api_base = "https://oneal-api.arkturian.com/v1"
 
         self.root = tk.Tk()
         self.root.title("Storage Annotation GUI")
