@@ -3,6 +3,7 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Q
 from fastapi.responses import FileResponse
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func, or_
 from typing import Optional, List, Any, Dict, Tuple
 import json
@@ -13,6 +14,62 @@ import subprocess
 from pathlib import Path
 from io import BytesIO
 from datetime import datetime
+
+def _generate_trim_metadata_from_image(image_path: Path) -> Dict[str, Any]:
+    """Compute trim bounds for a given image file."""
+    with Image.open(image_path) as img:
+        width, height = img.size
+
+        def _compute_bbox(image: Image.Image) -> Optional[Tuple[int, int, int, int]]:
+            if width == 0 or height == 0:
+                return None
+            if "A" in image.getbands():
+                alpha_bbox = image.getchannel("A").getbbox()
+                if alpha_bbox:
+                    return alpha_bbox
+            gray = image.convert("L")
+            mask = gray.point(lambda p: 255 if p < 250 else 0)
+            return mask.getbbox()
+
+        bbox = _compute_bbox(img)
+        trim_meta: Dict[str, Any] = {
+            "width": width,
+            "height": height,
+            "trim_width": width,
+            "trim_height": height,
+            "normalized": [0.0, 0.0, 1.0, 1.0],
+            "applied": False,
+        }
+
+        if bbox:
+            x1, y1, x2, y2 = bbox
+            x1 = max(0, min(x1, width))
+            y1 = max(0, min(y1, height))
+            x2 = max(0, min(x2, width))
+            y2 = max(0, min(y2, height))
+            if x2 > x1 and y2 > y1 and (x1 != 0 or y1 != 0 or x2 != width or y2 != height):
+                trim_meta.update({
+                    "applied": True,
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "trim_width": x2 - x1,
+                    "trim_height": y2 - y1,
+                    "normalized": [
+                        x1 / width if width else 0.0,
+                        y1 / height if height else 0.0,
+                        x2 / width if width else 1.0,
+                        y2 / height if height else 1.0,
+                    ],
+                })
+
+        # Ensure default coordinates exist even if not applied
+        trim_meta.setdefault("x1", 0)
+        trim_meta.setdefault("y1", 0)
+        trim_meta.setdefault("x2", width)
+        trim_meta.setdefault("y2", height)
+        return trim_meta
 
 from database import get_db
 from auth import get_current_user, get_current_user_optional, generate_api_key
@@ -2221,10 +2278,6 @@ def get_media_variant(
     if isinstance(context_meta, dict):
         stored_trim = context_meta.get("trim_bounds")
 
-    apply_trim = False
-    if stored_trim and stored_trim.get("applied") and trim is not None:
-        apply_trim = bool(trim)
-
     if not mime.startswith("image/"):
         # For non-images, return original file for now
         path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
@@ -2275,6 +2328,31 @@ def get_media_variant(
     # Final check: do we have a valid source path?
     if not src_path or not src_path.exists():
         raise HTTPException(status_code=404, detail="File missing")
+
+    # Auto-generate trim bounds when explicitly requested or default-enabled but missing
+    trim_param_supplied = trim is not None
+    trim_requested = bool(trim) if trim_param_supplied else False
+    default_trim_enabled = bool(context_meta.get("trim_delivery_default")) if isinstance(context_meta, dict) else False
+
+    if (trim_requested or default_trim_enabled) and (not stored_trim or not stored_trim.get("normalized")):
+        try:
+            generated_meta = _generate_trim_metadata_from_image(src_path)
+            if generated_meta:
+                if not isinstance(context_meta, dict):
+                    context_meta = {}
+                context_meta["trim_bounds"] = generated_meta
+                obj.ai_context_metadata = context_meta
+                db.add(obj)
+                flag_modified(obj, "ai_context_metadata")
+                db.commit()
+                db.refresh(obj)
+                stored_trim = generated_meta
+                print(f"✅ Generated trim bounds for object {object_id}")
+        except Exception as exc:
+            db.rollback()
+            print(f"⚠️ Failed to generate trim bounds for object {object_id}: {exc}")
+        finally:
+            context_meta = obj.ai_context_metadata or {}
 
     # Thumbnail path (existing convention)
     # Use object_key if available, otherwise use object_id for external URIs
@@ -2359,6 +2437,13 @@ def get_media_variant(
 
         buffer.seek(0)
         return Response(content=buffer.getvalue(), media_type=media_type)
+
+    apply_trim = False
+    if stored_trim and stored_trim.get("applied"):
+        if trim_param_supplied:
+            apply_trim = bool(trim)
+        else:
+            apply_trim = default_trim_enabled
 
     # Default: if no hints provided, return original (full)
     if not apply_trim and variant is None and display_for is None and not width and not height:
