@@ -14,6 +14,8 @@ from pathlib import Path
 from io import BytesIO
 from datetime import datetime
 
+from PIL import Image
+
 def _generate_trim_metadata_from_image(image_path: Path) -> Dict[str, Any]:
     """Compute trim bounds for a given image file."""
     with Image.open(image_path) as img:
