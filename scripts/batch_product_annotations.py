@@ -32,6 +32,8 @@ class StorageObject:
     mime_type: str
     ai_context_metadata: dict
     ai_category: Optional[str]
+    context: Optional[str]
+    metadata_json: Optional[dict]
 
     @property
     def has_annotations(self) -> bool:
@@ -47,7 +49,13 @@ class StorageObject:
             return False
 
 
-def fetch_objects(base_url: str, api_key: str, tenant: Optional[str], limit: int) -> List[StorageObject]:
+def fetch_objects(
+    base_url: str,
+    api_key: str,
+    tenant: Optional[str],
+    limit: int,
+    context_contains: Optional[str],
+) -> List[StorageObject]:
     """Fetch storage objects for the given tenant."""
     params = {
         "mine": "false",
@@ -72,6 +80,10 @@ def fetch_objects(base_url: str, api_key: str, tenant: Optional[str], limit: int
         mime = (item.get("mime_type") or "").lower()
         if not mime.startswith("image/"):
             continue
+        context = item.get("context")
+        if context_contains:
+            if not context or context_contains.lower() not in context.lower():
+                continue
         results.append(
             StorageObject(
                 id=item["id"],
@@ -79,6 +91,8 @@ def fetch_objects(base_url: str, api_key: str, tenant: Optional[str], limit: int
                 mime_type=mime,
                 ai_context_metadata=item.get("ai_context_metadata") or {},
                 ai_category=item.get("ai_category"),
+                context=context,
+                metadata_json=item.get("metadata_json") or {},
             )
         )
 
@@ -107,10 +121,22 @@ def fetch_single_object(base_url: str, api_key: str, object_id: int) -> Optional
         mime_type=mime,
         ai_context_metadata=item.get("ai_context_metadata") or {},
         ai_category=item.get("ai_category"),
+        context=item.get("context"),
+        metadata_json=item.get("metadata_json") or {},
     )
 
 
-def trigger_analysis(base_url: str, api_key: str, object_id: int, vision_mode: str, tasks: str, context_role: str, metadata: Optional[str]) -> str:
+def trigger_analysis(
+    base_url: str,
+    api_key: str,
+    object_id: int,
+    vision_mode: str,
+    tasks: str,
+    context_role: str,
+    metadata: Optional[str],
+    trim_before_analysis: bool,
+    trim_delivery_default: bool,
+) -> str:
     params = {
         "mode": "quality",
         "ai_tasks": tasks,
@@ -119,6 +145,10 @@ def trigger_analysis(base_url: str, api_key: str, object_id: int, vision_mode: s
     }
     if metadata:
         params["ai_metadata"] = metadata
+    if trim_before_analysis:
+        params["trim_before_analysis"] = "true"
+    if trim_delivery_default:
+        params["trim_delivery_default"] = "true"
 
     url = f"{base_url.rstrip('/')}/storage/analyze-async/{object_id}"
     headers = {"X-API-KEY": api_key}
@@ -154,6 +184,8 @@ def ensure_annotations(
     tasks: str,
     context_role: str,
     metadata: Optional[str],
+    trim_before_analysis: bool,
+    trim_delivery_default: bool,
 ) -> None:
     for index, obj in enumerate(objects, start=1):
         if not force and obj.has_annotations:
@@ -170,6 +202,8 @@ def ensure_annotations(
                 tasks=tasks,
                 context_role=context_role,
                 metadata=metadata,
+                trim_before_analysis=trim_before_analysis,
+                trim_delivery_default=trim_delivery_default,
             )
         except Exception as exc:
             print(f"    ❌ Failed to start analysis: {exc}")
@@ -211,6 +245,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--tenant", default=None, help="Tenant ID to filter (optional – inferred from API key)")
     parser.add_argument("--object-id", type=int, default=None, help="Process only this storage object ID")
     parser.add_argument("--limit", type=int, default=5000, help="Maximum objects to scan")
+    parser.add_argument(
+        "--context-contains",
+        default=None,
+        help="Only process objects whose context contains this substring",
+    )
     parser.add_argument("--force", action="store_true", help="Re-run analysis even if annotations already exist")
     parser.add_argument("--no-poll", action="store_true", help="Do not wait for task completion")
     parser.add_argument("--vision-mode", default="product", help="Vision mode (default: product)")
@@ -224,6 +263,16 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         "--metadata-json",
         default=None,
         help="Optional JSON string to pass as ai_metadata for every run",
+    )
+    parser.add_argument(
+        "--trim-before-analysis",
+        action="store_true",
+        help="Request trimming before analysis",
+    )
+    parser.add_argument(
+        "--trim-delivery-default",
+        action="store_true",
+        help="Set trim_delivery_default flag when triggering analysis",
     )
     return parser.parse_args(argv)
 
@@ -239,7 +288,13 @@ def main(argv: List[str]) -> int:
                 return 1
             objects = [obj]
         else:
-            objects = fetch_objects(args.base_url, args.api_key, args.tenant, args.limit)
+            objects = fetch_objects(
+                args.base_url,
+                args.api_key,
+                args.tenant,
+                args.limit,
+                args.context_contains,
+            )
     except Exception as exc:
         print(f"Failed to fetch objects: {exc}")
         return 1
@@ -263,6 +318,8 @@ def main(argv: List[str]) -> int:
         tasks=args.tasks,
         context_role=args.context_role,
         metadata=args.metadata_json,
+        trim_before_analysis=args.trim_before_analysis,
+        trim_delivery_default=args.trim_delivery_default,
     )
 
     print("Batch run finished.")
