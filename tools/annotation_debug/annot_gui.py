@@ -55,6 +55,9 @@ class AnnotationGUI:
         self.tk_image: Optional[ImageTk.PhotoImage] = None
         self.display_scale = 1.0
 
+        self._product_cache_lock = threading.Lock()
+        self._product_cache: Dict[str, List[Dict[str, Any]]] = {}
+
     # ------------------------------------------------------------------ UI
     def _build_layout(self) -> None:
         header = ttk.Frame(self.root, padding=10)
@@ -262,6 +265,9 @@ class AnnotationGUI:
         if object_id is None:
             return
 
+        product_base = self.product_base_entry.get().strip() or self.product_api_base
+        product_api_key = self.product_api_key_entry.get().strip() or self.default_api_key
+
         def worker():
             try:
                 self.log(f"Lade Objekt {object_id}…")
@@ -269,6 +275,8 @@ class AnnotationGUI:
                 self.current_object = data
                 self.current_prompt = (data.get("ai_context_metadata") or {}).get("prompt", "")
                 self.current_response = (data.get("ai_context_metadata") or {}).get("response", "")
+
+                self._auto_assign_product_id(object_id, data, product_base, product_api_key)
 
                 annotations = self._annotations_from_object(data)
                 self.current_annotations = annotations
@@ -594,6 +602,222 @@ class AnnotationGUI:
         for ann in self.current_annotations:
             conf = f" ({ann.confidence:.2%})" if ann.confidence is not None else ""
             self.annotations_box.insert(tk.END, f"- {ann.label} [{ann.kind}]{conf}\n")
+
+    # ------------------------------------------------------- product lookup
+    def _auto_assign_product_id(
+        self,
+        object_id: int,
+        obj: Dict[str, Any],
+        product_base: str,
+        product_api_key: str,
+    ) -> None:
+        try:
+            result = self._infer_product_for_storage(object_id, obj, product_base, product_api_key)
+        except Exception as exc:  # pylint: disable=broad-except
+            self.log(f"Produktsuche fehlgeschlagen: {exc}")
+            return
+
+        if not result:
+            return
+
+        product = result.get("product") or {}
+        if not isinstance(product, dict):
+            try:
+                product = dict(product)  # type: ignore[arg-type]
+            except Exception:  # pylint: disable=broad-except
+                self.log("Produktsuche lieferte kein lesbares Produktobjekt.")
+                return
+
+        product_id = product.get("id")
+        if not product_id:
+            return
+
+        metadata = result.get("metadata")
+
+        def apply() -> None:
+            current_value = self.product_id_entry.get().strip()
+            if current_value and current_value not in {"", str(object_id)} and current_value != product_id:
+                self.log(
+                    "Produkt-ID bereits gesetzt – automatische Zuordnung "
+                    f"{product_id} übersprungen."
+                )
+                return
+
+            self.product_id_entry.delete(0, tk.END)
+            self.product_id_entry.insert(0, product_id)
+            self.log(
+                f"Produkt automatisch erkannt: {product_id} – Storage Object {object_id}."
+            )
+
+            if metadata:
+                import json as _json
+
+                self.product_metadata = metadata
+                self.metadata_box.delete("1.0", tk.END)
+                self.metadata_box.insert(
+                    tk.END,
+                    _json.dumps(metadata, ensure_ascii=False, indent=2),
+                )
+
+        self.root.after(0, apply)
+
+    def _infer_product_for_storage(
+        self,
+        object_id: int,
+        obj: Dict[str, Any],
+        product_base: str,
+        product_api_key: str,
+    ) -> Optional[Dict[str, Any]]:
+        products = self._load_products_cache(product_base, product_api_key)
+        if not products:
+            return None
+
+        candidates = self._extract_candidate_product_ids(obj)
+
+        def _find_by_predicate(predicate):
+            for product in products:
+                if not isinstance(product, dict):
+                    try:
+                        product = dict(product)  # type: ignore[arg-type]
+                    except Exception:  # pylint: disable=broad-except
+                        continue
+                try:
+                    if predicate(product):
+                        return product
+                except Exception:  # pylint: disable=broad-except
+                    continue
+            return None
+
+        product = None
+
+        if candidates:
+            for candidate in candidates:
+                product = _find_by_predicate(
+                    lambda p: str(p.get("id")) == candidate or str(p.get("slug")) == candidate
+                )
+                if product and self._product_matches_storage(product, object_id):
+                    break
+                product = None
+
+        if not product:
+            product = _find_by_predicate(
+                lambda p: self._product_matches_storage(p, object_id)
+            )
+
+        if not product:
+            return None
+
+        metadata = self._build_product_metadata(product)
+        return {"product": product, "metadata": metadata}
+
+    def _load_products_cache(self, product_base: str, product_api_key: str) -> List[Dict[str, Any]]:
+        base = product_base.rstrip("/")
+        with self._product_cache_lock:
+            cached = self._product_cache.get(base)
+        if cached is not None:
+            return cached
+
+        headers = {"X-API-Key": product_api_key} if product_api_key else {}
+        url = f"{base}/products?limit=100000"
+        self.log("Lade Produktliste aus Oneal API…")
+        resp = requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        raw_products = data.get("results") or []
+        products: List[Dict[str, Any]] = []
+        for item in raw_products:
+            if isinstance(item, dict):
+                products.append(item)
+            else:
+                try:
+                    products.append(dict(item))  # type: ignore[arg-type]
+                except Exception:  # pylint: disable=broad-except
+                    continue
+
+        with self._product_cache_lock:
+            self._product_cache[base] = products
+
+        self.log(f"{len(products)} Produkte geladen.")
+        return products
+
+    def _extract_candidate_product_ids(self, obj: Dict[str, Any]) -> List[str]:
+        candidates: List[str] = []
+
+        def _push(value: Optional[str]) -> None:
+            if not value:
+                return
+            value = value.strip()
+            if not value or value.lower() == "none":
+                return
+            values_to_consider = [value]
+            if "/" in value:
+                values_to_consider.append(value.rstrip("/").split("/")[-1])
+            if "_" in value:
+                values_to_consider.append(value.split("_")[-1])
+            if ":" in value:
+                values_to_consider.append(value.split(":")[-1])
+            for candidate in values_to_consider:
+                candidate = candidate.strip()
+                if candidate and candidate not in candidates:
+                    candidates.append(candidate)
+
+        for key in ("collection_id", "link_id"):
+            raw = obj.get(key)
+            if isinstance(raw, str):
+                _push(raw)
+
+        meta = obj.get("metadata_json")
+        if isinstance(meta, dict):
+            product_meta = meta.get("product") or {}
+            if isinstance(product_meta, dict):
+                _push(str(product_meta.get("id")))
+                _push(str(product_meta.get("product_id")))
+
+        context = obj.get("context")
+        if isinstance(context, str):
+            parts = [part.strip() for part in context.replace("|", ",").split(",")]
+            for part in parts:
+                if part.lower().startswith(("oneal", "mtb", "mx")):
+                    _push(part)
+
+        return candidates
+
+    def _product_matches_storage(self, product: Dict[str, Any], storage_id: int) -> bool:
+        target = str(storage_id)
+
+        def _match(value: Any) -> bool:
+            if value is None:
+                return False
+            return str(value) == target
+
+        if _match(product.get("storage_id")):
+            return True
+
+        media_items = product.get("media") or []
+        for item in media_items:
+            if not isinstance(item, dict):
+                continue
+            if _match(item.get("storage_id")):
+                return True
+
+        variants = product.get("variants") or []
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+            for key in ("image_storage_id", "storage_id"):
+                if _match(variant.get(key)):
+                    return True
+
+        hero = product.get("hero")
+        if isinstance(hero, dict) and _match(hero.get("storage_id")):
+            return True
+
+        gallery = product.get("gallery") or []
+        for item in gallery:
+            if isinstance(item, dict) and _match(item.get("storage_id")):
+                return True
+
+        return False
 
     # -------------------------------------------------------------- errors
     def _handle_error(self, title: str, exc: Exception) -> None:
