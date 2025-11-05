@@ -3,7 +3,6 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Q
 from fastapi.responses import FileResponse
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func, or_
 from typing import Optional, List, Any, Dict, Tuple
 import json
@@ -2340,12 +2339,13 @@ def get_media_variant(
             if generated_meta:
                 if not isinstance(context_meta, dict):
                     context_meta = {}
+                context_meta = dict(context_meta)
                 context_meta["trim_bounds"] = generated_meta
-                obj.ai_context_metadata = context_meta
-                db.add(obj)
-                flag_modified(obj, "ai_context_metadata")
+                db.query(StorageObject).filter(StorageObject.id == object_id).update(
+                    {"ai_context_metadata": context_meta}, synchronize_session=False
+                )
                 db.commit()
-                db.refresh(obj)
+                obj.ai_context_metadata = context_meta
                 stored_trim = generated_meta
                 print(f"✅ Generated trim bounds for object {object_id}")
         except Exception as exc:
