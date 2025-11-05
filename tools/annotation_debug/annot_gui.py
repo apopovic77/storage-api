@@ -380,6 +380,10 @@ class AnnotationGUI:
                 url = f"{base.rstrip('/')}/products/{product_id}?format=resolved"
                 headers = {"X-API-Key": key} if key else {}
                 resp = requests.get(url, headers=headers, timeout=45)
+                if resp.status_code == 404:
+                    self.log(f"Produkt {product_id} nicht gefunden ({resp.status_code}).")
+                    messagebox.showinfo("Produkt nicht gefunden", f"Keine Daten für Product ID {product_id}.")
+                    return
                 resp.raise_for_status()
                 product = resp.json()
                 metadata = self._build_product_metadata(product)
@@ -391,6 +395,13 @@ class AnnotationGUI:
                 specs_count = len(metadata.get("specifications", []))
                 features_count = len(metadata.get("features", []))
                 self.log(f"Produkt {product_id} geladen – {specs_count} Spezifikationen, {features_count} Features.")
+            except requests.HTTPError as http_exc:  # pylint: disable=broad-except
+                status = getattr(http_exc.response, "status_code", None)
+                if status == 404:
+                    self.log(f"Produkt {product_id} nicht gefunden (HTTP 404).")
+                    messagebox.showinfo("Produkt nicht gefunden", f"Keine Daten für Product ID {product_id}.")
+                else:
+                    self._handle_error("Product Specs laden fehlgeschlagen", http_exc)
             except Exception as exc:  # pylint: disable=broad-except
                 self._handle_error("Product Specs laden fehlgeschlagen", exc)
 
