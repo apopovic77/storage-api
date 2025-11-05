@@ -661,8 +661,10 @@ class AsyncPipelineManager:
             trim_meta = analysis_result.get("trim_metadata")
             if trim_meta:
                 context_meta["trim_bounds"] = trim_meta
-                if cfg_trim.get("delivery_default"):
-                    context_meta["trim_delivery_default"] = True
+            if cfg_trim.get("delivery_default"):
+                context_meta["trim_delivery_default"] = True
+            else:
+                context_meta.pop("trim_delivery_default", None)
 
             storage_obj.ai_context_metadata = context_meta
 
@@ -801,8 +803,10 @@ class AsyncPipelineManager:
             trim_meta = analysis_result.get("trim_metadata")
             if trim_meta:
                 context_meta["trim_bounds"] = trim_meta
-                if cfg_trim.get("delivery_default"):
-                    context_meta["trim_delivery_default"] = True
+            if cfg_trim.get("delivery_default"):
+                context_meta["trim_delivery_default"] = True
+            else:
+                context_meta.pop("trim_delivery_default", None)
 
             storage_obj.ai_context_metadata = context_meta
 

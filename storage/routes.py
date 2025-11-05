@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Tuple
 import json
 import os
 import shutil
@@ -12,6 +12,7 @@ import base64
 import subprocess
 from pathlib import Path
 from io import BytesIO
+from datetime import datetime
 
 from database import get_db
 from auth import get_current_user, get_current_user_optional, generate_api_key
@@ -78,6 +79,172 @@ class KGSearchResponse(BaseModel):
     query: str
     results: List[SearchResultChunk]  # Changed from 'items' to 'results' for clarity
     total_embeddings: int
+
+
+class MediaDerivativeStatus(BaseModel):
+    width: int
+    quality: int
+    format: str
+    exists: bool
+    size_bytes: Optional[int] = None
+    path: Optional[str] = None
+    mtime: Optional[str] = None
+
+
+class MediaCacheStatus(BaseModel):
+    object_id: int
+    tenant_id: Optional[str] = None
+    original_exists: bool
+    original_path: Optional[str] = None
+    derivatives: List[MediaDerivativeStatus]
+    message: Optional[str] = None
+
+
+def _resolve_quality_for_width(width: int) -> int:
+    return 85 if width >= 1000 else 75
+
+
+def _build_derivative_name(base_name: str, width: int, quality: int, fmt: str) -> str:
+    suffix = fmt.lower()
+    if suffix == "jpeg":
+        suffix = "jpg"
+    if suffix not in {"jpg", "png", "webp"}:
+        suffix = "webp"
+    edge = max(width, 1)
+    return f"web_{base_name}_{edge}e_q{quality}.{suffix}"
+
+
+@router.get("/cache-status", response_model=List[MediaCacheStatus])
+def get_media_cache_status(
+    object_ids: List[int] = Query(..., alias="object_id", description="List of storage object IDs"),
+    widths: Optional[List[int]] = Query(None, alias="width", description="Derivative widths to inspect"),
+    qualities: Optional[List[int]] = Query(None, alias="quality", description="Optional quality overrides"),
+    image_format: str = Query("webp", description="Derivative format to inspect"),
+    include_original: bool = Query(True, description="Include original file status"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    tenant_id: Optional[str] = Depends(get_tenant_id_optional),
+):
+    unique_ids = list(dict.fromkeys(int(oid) for oid in object_ids if int(oid) > 0))
+    if not unique_ids:
+        raise HTTPException(status_code=400, detail="No valid object IDs provided")
+
+    width_values = [int(w) for w in (widths or [130, 1300]) if int(w) > 0]
+    if not width_values:
+        raise HTTPException(status_code=400, detail="No valid widths provided")
+
+    quality_overrides: List[int] = []
+    if qualities:
+        try:
+            quality_overrides = [int(q) for q in qualities if int(q) > 0]
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise HTTPException(status_code=400, detail=f"Invalid quality value: {exc}")
+
+    def _quality_for_index(idx: int, width: int) -> int:
+        if quality_overrides:
+            if len(quality_overrides) == 1:
+                return quality_overrides[0]
+            if idx < len(quality_overrides):
+                return quality_overrides[idx]
+        return _resolve_quality_for_width(width)
+
+    response: List[MediaCacheStatus] = []
+
+    for object_id in unique_ids:
+        record = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+
+        if not record:
+            response.append(
+                MediaCacheStatus(
+                    object_id=object_id,
+                    tenant_id=None,
+                    original_exists=False,
+                    original_path=None,
+                    derivatives=[],
+                    message="Object not found",
+                )
+            )
+            continue
+
+        if tenant_id and record.tenant_id and record.tenant_id != tenant_id:
+            response.append(
+                MediaCacheStatus(
+                    object_id=object_id,
+                    tenant_id=record.tenant_id,
+                    original_exists=False,
+                    original_path=None,
+                    derivatives=[],
+                    message="Object belongs to different tenant",
+                )
+            )
+            continue
+
+        derivatives: List[MediaDerivativeStatus] = []
+        base_name = Path(record.object_key).stem if record.object_key else f"ext_{object_id}"
+        tenant_slug = record.tenant_id or tenant_id or ""
+
+        for idx, width in enumerate(width_values):
+            quality_value = _quality_for_index(idx, width)
+            derivative_name = _build_derivative_name(base_name, width, quality_value, image_format)
+
+            candidate_paths = [generic_storage.webview_dir / derivative_name]
+            if tenant_slug:
+                candidate_paths.append(generic_storage.webview_dir / tenant_slug / derivative_name)
+
+            exists = False
+            size_bytes = None
+            mtime_iso = None
+            resolved_path = None
+
+            for candidate in candidate_paths:
+                if candidate.exists():
+                    exists = True
+                    resolved_path = str(candidate)
+                    try:
+                        stats = candidate.stat()
+                        size_bytes = stats.st_size
+                        mtime_iso = datetime.fromtimestamp(stats.st_mtime).isoformat()
+                    except Exception:
+                        pass
+                    break
+
+            derivatives.append(
+                MediaDerivativeStatus(
+                    width=width,
+                    quality=quality_value,
+                    format=image_format.lower(),
+                    exists=exists,
+                    size_bytes=size_bytes,
+                    path=resolved_path,
+                    mtime=mtime_iso,
+                )
+            )
+
+        original_exists = False
+        original_path = None
+        message = None
+
+        if include_original:
+            if record.object_key:
+                original_path = str(generic_storage.absolute_path_for_key(record.object_key, record.tenant_id or tenant_slug or "arkturian"))
+                original_exists = Path(original_path).exists()
+            elif record.external_uri:
+                original_path = record.external_uri
+                original_exists = False
+                message = "Object uses external URI"
+
+        response.append(
+            MediaCacheStatus(
+                object_id=object_id,
+                tenant_id=record.tenant_id,
+                original_exists=original_exists,
+                original_path=original_path,
+                derivatives=derivatives,
+                message=message,
+            )
+        )
+
+    return response
 
 
 @router.get("/similar/{object_id}", response_model=SimilarityResponse)
@@ -2051,19 +2218,12 @@ def get_media_variant(
 
     context_meta = obj.ai_context_metadata or {}
     stored_trim = None
-    trim_default = False
     if isinstance(context_meta, dict):
         stored_trim = context_meta.get("trim_bounds")
-        trim_default = bool(context_meta.get("trim_delivery_default"))
 
     apply_trim = False
-    if stored_trim and stored_trim.get("applied"):
-        if trim is None:
-            apply_trim = trim_default
-        else:
-            apply_trim = bool(trim)
-    elif trim:
-        apply_trim = bool(trim) and bool(stored_trim)
+    if stored_trim and stored_trim.get("applied") and trim is not None:
+        apply_trim = bool(trim)
 
     if not mime.startswith("image/"):
         # For non-images, return original file for now

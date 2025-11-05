@@ -112,12 +112,14 @@ def trigger_trim(
     tasks: Optional[str],
     vision_mode: Optional[str],
     context_role: Optional[str],
+    trim_delivery_default: bool,
 ) -> str:
     params = {
         "mode": "quality",
         "trim_before_analysis": "true",
-        "trim_delivery_default": "true",
     }
+    if trim_delivery_default:
+        params["trim_delivery_default"] = "true"
     if tasks:
         params["ai_tasks"] = tasks
     if vision_mode:
@@ -158,6 +160,7 @@ def ensure_trimmed(
     tasks: Optional[str],
     vision_mode: Optional[str],
     context_role: Optional[str],
+    trim_delivery_default: bool,
 ) -> None:
     for index, obj in enumerate(objects, start=1):
         if not force and obj.has_trim:
@@ -173,6 +176,7 @@ def ensure_trimmed(
                 tasks=tasks,
                 vision_mode=vision_mode,
                 context_role=context_role,
+                trim_delivery_default=trim_delivery_default,
             )
         except Exception as exc:  # pylint: disable=broad-except
             print(f"    ❌ Failed to start trim: {exc}")
@@ -219,6 +223,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--tasks", default="vision", help="AI tasks to run (default: vision)")
     parser.add_argument("--vision-mode", default="product", help="Vision mode for analysis (default: product)")
     parser.add_argument("--context-role", default="product", help="Context role (default: product)")
+    parser.add_argument("--set-trim-default", action="store_true", help="Set trim_delivery_default=true when processing")
     return parser.parse_args(argv)
 
 
@@ -256,6 +261,7 @@ def main(argv: List[str]) -> int:
         tasks=args.tasks,
         vision_mode=args.vision_mode,
         context_role=args.context_role,
+        trim_delivery_default=args.set_trim_default,
     )
 
     print("Batch trim run finished.")
