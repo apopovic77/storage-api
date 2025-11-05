@@ -604,12 +604,15 @@ class AnnotationGUI:
 
         specs: List[Dict[str, Any]] = []
         for item in (product.get("specifications") or []):
-            label = item.get("label") or item.get("name")
-            value = item.get("value")
+            item_dict = self._ensure_dict(item)
+            if not item_dict:
+                continue
+            label = item_dict.get("label") or item_dict.get("name")
+            value = item_dict.get("value")
             if not label or value is None:
                 continue
             entry: Dict[str, Any] = {"label": label, "value": value}
-            unit = item.get("unit")
+            unit = item_dict.get("unit")
             if unit:
                 entry["unit"] = unit
             specs.append(entry)
