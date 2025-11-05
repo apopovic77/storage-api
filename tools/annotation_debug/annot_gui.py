@@ -101,6 +101,11 @@ class AnnotationGUI:
         ttk.Button(buttons, text="Analyze (quality)", command=self.on_analyze).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons, text="Fetch annotations", command=self.on_fetch_annotations).pack(side=tk.LEFT, padx=5)
 
+        self.trim_fetch_var = tk.BooleanVar(value=True)
+        self.trim_analyze_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(buttons, text="Show trimmed image", variable=self.trim_fetch_var).pack(side=tk.LEFT, padx=8)
+        ttk.Checkbutton(buttons, text="Trim during analysis", variable=self.trim_analyze_var).pack(side=tk.LEFT, padx=8)
+
         main = ttk.Frame(self.root, padding=10)
         main.pack(fill=tk.BOTH, expand=True)
 
@@ -174,13 +179,24 @@ class AnnotationGUI:
 
     def _fetch_image(self, object_id: int) -> Image.Image:
         base_url = self._base_url()
-        specs = [
-            "trim=true&width=1400&format=webp&quality=80",
-            "trim=true&width=1200&format=jpeg&quality=85",
-            "trim=true&width=900&format=jpeg&quality=85",
-            "trim=true&width=720&format=jpeg&quality=80",
-            "trim=true",
-        ]
+        use_trim = bool(self.trim_fetch_var.get())
+        if use_trim:
+            specs = [
+                "trim=true&width=1400&format=webp&quality=80",
+                "trim=true&width=1200&format=jpeg&quality=85",
+                "trim=true&width=900&format=jpeg&quality=85",
+                "trim=true&width=720&format=jpeg&quality=80",
+                "trim=true",
+            ]
+        else:
+            specs = [
+                "trim=false&width=1400&format=webp&quality=80",
+                "trim=false&width=1200&format=jpeg&quality=85",
+                "trim=false&width=900&format=jpeg&quality=85",
+                "trim=false&width=720&format=jpeg&quality=80",
+                "trim=false",
+                "",  # final fallback without explicit trim flag
+            ]
 
         last_exc: Optional[Exception] = None
 
@@ -197,13 +213,23 @@ class AnnotationGUI:
             return data
 
         for spec in specs:
-            url = f"{base_url}/storage/media/{object_id}?{spec}&_={int(time.time())}"
+            query_parts = []
+            if spec:
+                query_parts.append(spec)
+            query_parts.append(f"_={int(time.time())}")
+            query_string = "&".join(query_parts)
+            url = f"{base_url}/storage/media/{object_id}?{query_string}"
             try:
                 data = _download(url, headers=self._headers())
+                if spec:
+                    mode = "trim" if "trim=true" in spec else "original"
+                    self.log(f"Bild über {mode}-Variant geladen ({spec}).")
+                else:
+                    self.log("Bild ohne Trim-Parameter geladen.")
                 return Image.open(BytesIO(data)).convert("RGBA")
             except Exception as exc:  # pylint: disable=broad-except
                 last_exc = exc
-                self.log(f"Bild-Download fehlgeschlagen ({spec}): {exc}")
+                self.log(f"Bild-Download fehlgeschlagen ({spec or 'default'}): {exc}")
 
         # Try external fallbacks using object metadata (file_url / external_uri)
         try:
@@ -287,6 +313,10 @@ class AnnotationGUI:
                     "mode=quality&ai_tasks=vision,embedding,kg&"
                     "ai_vision_mode=product&ai_context_role=product"
                 )
+                if self.trim_analyze_var.get():
+                    route += "&trim_before_analysis=true&trim_delivery_default=true"
+                else:
+                    route += "&trim_before_analysis=false&trim_delivery_default=false"
                 if metadata_payload is not None:
                     try:
                         import json as _json
