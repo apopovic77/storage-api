@@ -58,6 +58,60 @@ class AnnotationGUI:
         self._product_cache_lock = threading.Lock()
         self._product_cache: Dict[str, List[Dict[str, Any]]] = {}
 
+    # ---------------------------------------------------------- utils/helpers
+    @staticmethod
+    def _ensure_dict(value: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(value, dict):
+            return value
+
+        if hasattr(value, "model_dump"):
+            try:
+                data = value.model_dump()  # type: ignore[attr-defined]
+                if isinstance(data, dict):
+                    return data
+            except Exception:  # pylint: disable=broad-except
+                return None
+
+        if hasattr(value, "dict"):
+            try:
+                data = value.dict()  # type: ignore[attr-defined]
+                if isinstance(data, dict):
+                    return data
+            except Exception:  # pylint: disable=broad-except
+                return None
+
+        if hasattr(value, "__dict__"):
+            try:
+                data = dict(value.__dict__)
+                if isinstance(data, dict):
+                    return data
+            except Exception:  # pylint: disable=broad-except
+                return None
+
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed.startswith("{") and trimmed.endswith("}"):
+                try:
+                    import json as _json
+
+                    data = _json.loads(trimmed)
+                    if isinstance(data, dict):
+                        return data
+                except Exception:  # pylint: disable=broad-except
+                    return None
+            # Treat pure slug as ID-only dict for downstream lookup
+            if trimmed:
+                return {"id": trimmed}
+
+        try:
+            data = dict(value)  # type: ignore[arg-type]
+            if isinstance(data, dict):
+                return data
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+        return None
+
     # ------------------------------------------------------------------ UI
     def _build_layout(self) -> None:
         header = ttk.Frame(self.root, padding=10)
@@ -621,12 +675,10 @@ class AnnotationGUI:
             return
 
         product = result.get("product") or {}
-        if not isinstance(product, dict):
-            try:
-                product = dict(product)  # type: ignore[arg-type]
-            except Exception:  # pylint: disable=broad-except
-                self.log("Produktsuche lieferte kein lesbares Produktobjekt.")
-                return
+        product = self._ensure_dict(product)
+        if not product:
+            self.log("Produktsuche lieferte kein lesbares Produktobjekt.")
+            return
 
         product_id = product.get("id")
         if not product_id:
@@ -675,12 +727,10 @@ class AnnotationGUI:
         candidates = self._extract_candidate_product_ids(obj)
 
         def _find_by_predicate(predicate):
-            for product in products:
-                if not isinstance(product, dict):
-                    try:
-                        product = dict(product)  # type: ignore[arg-type]
-                    except Exception:  # pylint: disable=broad-except
-                        continue
+            for entry in products:
+                product = self._ensure_dict(entry)
+                if not product:
+                    continue
                 try:
                     if predicate(product):
                         return product
@@ -726,13 +776,9 @@ class AnnotationGUI:
         raw_products = data.get("results") or []
         products: List[Dict[str, Any]] = []
         for item in raw_products:
-            if isinstance(item, dict):
-                products.append(item)
-            else:
-                try:
-                    products.append(dict(item))  # type: ignore[arg-type]
-                except Exception:  # pylint: disable=broad-except
-                    continue
+            product = self._ensure_dict(item)
+            if product:
+                products.append(product)
 
         with self._product_cache_lock:
             self._product_cache[base] = products
@@ -783,6 +829,10 @@ class AnnotationGUI:
         return candidates
 
     def _product_matches_storage(self, product: Dict[str, Any], storage_id: int) -> bool:
+        product = self._ensure_dict(product)
+        if not product:
+            return False
+
         target = str(storage_id)
 
         def _match(value: Any) -> bool:
