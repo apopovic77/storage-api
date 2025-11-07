@@ -1103,8 +1103,33 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
             file_path = generic_storage.absolute_path_for_key(storage_obj.object_key, tenant_id)
             print(f"📁 [NORMAL MODE] Using local file: {file_path}")
 
-        ai_queue_file = Path("/var/log/ai_analysis_queue.txt")
-        ai_queue_file.parent.mkdir(parents=True, exist_ok=True)
+        configured_queue_path = Path(settings.AI_ANALYSIS_QUEUE_PATH)
+        fallback_queue_path = Path("/tmp/ai_analysis_queue.txt")
+
+        def _prepare_queue_path(candidate: Path) -> Optional[Path]:
+            try:
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                # Touch the file to validate write permissions.
+                with open(candidate, "a"):
+                    pass
+                return candidate
+            except PermissionError as exc:
+                print(f"⚠️  Cannot write AI analysis queue file at {candidate}: {exc}")
+                return None
+            except Exception as exc:
+                print(f"⚠️  Failed to initialize AI analysis queue path {candidate}: {exc}")
+                return None
+
+        ai_queue_file = _prepare_queue_path(configured_queue_path) or _prepare_queue_path(fallback_queue_path)
+
+        def _append_ai_queue_line(line: str) -> None:
+            if not ai_queue_file:
+                return
+            try:
+                with open(ai_queue_file, "a") as f:
+                    f.write(line)
+            except Exception as exc:
+                print(f"⚠️  Failed to append to AI analysis queue log {ai_queue_file}: {exc}")
         
         # Check if this is a pre-transcoded video zip file (HLS result)
         is_hls_result = (storage_obj.metadata_json and storage_obj.metadata_json.get('is_hls_result', False))
@@ -1185,8 +1210,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                             print(f"!!! WARNING: Thumbnail extraction from pre-transcoded video failed, skipping AI analysis")
                         else:
                             print(f"--- SUCCESS: Thumbnails extracted from pre-transcoded video")
-                            with open(ai_queue_file, "a") as f:
-                                f.write(f"{storage_obj.id}|video|{ai_thumb_dir}|{storage_obj.original_filename}\n")
+                            _append_ai_queue_line(f"{storage_obj.id}|video|{ai_thumb_dir}|{storage_obj.original_filename}\n")
                 
                 # Delete the original ZIP file since we have extracted the content
                 try:
@@ -1204,8 +1228,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
             # Check if this is actually an audio-only WebM file
             if storage_obj.mime_type == "video/webm" and _is_audio_only_webm_helper(file_path):
                 # Process as audio instead of video
-                with open(ai_queue_file, "a") as f:
-                    f.write(f"{storage_obj.id}|audio|{file_path}|{storage_obj.original_filename}\n")
+                _append_ai_queue_line(f"{storage_obj.id}|audio|{file_path}|{storage_obj.original_filename}\n")
                 print(f"--- SUCCESS: Audio-only WebM queued for AI transcription: {file_path}")
             else:
                 # Regular video processing: optionally enqueue AI analysis, then handle transcoding
@@ -1216,8 +1239,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         print(f"!!! WARNING: ffmpeg thumbnail extraction failed with code {result_code} for {file_path}")
                     else:
                         print(f"--- SUCCESS: Thumbnail extraction complete for {file_path}")
-                        with open(ai_queue_file, "a") as f:
-                            f.write(f"{storage_obj.id}|video|{ai_thumb_dir}|{storage_obj.original_filename}\n")
+                        _append_ai_queue_line(f"{storage_obj.id}|video|{ai_thumb_dir}|{storage_obj.original_filename}\n")
 
                 # Decide between local and Mac transcoding based on file size
                 file_size = file_path.stat().st_size
@@ -1366,15 +1388,13 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                     # Fallback to original file if resize fails
                     shutil.copy2(file_path, ai_image_dir / "image.jpg")
                 
-                with open(ai_queue_file, "a") as f:
-                    f.write(f"{storage_obj.id}|image|{ai_image_dir}|{storage_obj.original_filename}\n")
+                _append_ai_queue_line(f"{storage_obj.id}|image|{ai_image_dir}|{storage_obj.original_filename}\n")
                 print(f"--- SUCCESS: Image queued for AI analysis: {file_path}")
             
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("audio/"):
             # Audio processing - queue for AI transcription and analysis
             if not skip_ai_safety:
-                with open(ai_queue_file, "a") as f:
-                    f.write(f"{storage_obj.id}|audio|{file_path}|{storage_obj.original_filename}\n")
+                _append_ai_queue_line(f"{storage_obj.id}|audio|{file_path}|{storage_obj.original_filename}\n")
                 print(f"--- SUCCESS: Audio queued for AI analysis: {file_path}")
             
         elif (storage_obj.mime_type and (storage_obj.mime_type.startswith("text/") or
@@ -1424,8 +1444,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         pass # Fall through to generic text analysis
 
                 # Generic text analysis (fallback or non-TTS text files)
-                with open(ai_queue_file, "a") as f:
-                    f.write(f"{storage_obj.id}|text|{file_path}|{storage_obj.original_filename}\n")
+                _append_ai_queue_line(f"{storage_obj.id}|text|{file_path}|{storage_obj.original_filename}\n")
                 print(f"--- SUCCESS: Text queued for AI analysis: {file_path}")
             
     except Exception as e:

@@ -48,6 +48,29 @@ class StorageObject:
         except AttributeError:
             return False
 
+    @property
+    def has_embeddings(self) -> bool:
+        try:
+            embedding = (
+                self.ai_context_metadata
+                .get("embedding_info", {})
+                .get("embedding")
+            )
+            return isinstance(embedding, list) and len(embedding) > 0
+        except AttributeError:
+            return False
+
+        try:
+            annotations = (
+                self.ai_context_metadata
+                .get("embedding_info", {})
+                .get("metadata", {})
+                .get("annotations", [])
+            )
+            return bool(annotations)
+        except AttributeError:
+            return False
+
 
 def fetch_objects(
     base_url: str,
@@ -186,10 +209,14 @@ def ensure_annotations(
     metadata: Optional[str],
     trim_before_analysis: bool,
     trim_delivery_default: bool,
+    skip_if_embedding: bool,
 ) -> None:
     for index, obj in enumerate(objects, start=1):
         if not force and obj.has_annotations:
             print(f"[{index}] Object {obj.id} already has annotations – skipping")
+            continue
+        if skip_if_embedding and obj.has_embeddings:
+            print(f"[{index}] Object {obj.id} already has embeddings – skipping")
             continue
 
         print(f"[{index}] Triggering analysis for object {obj.id} ({obj.original_filename})")
@@ -274,6 +301,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         action="store_true",
         help="Set trim_delivery_default flag when triggering analysis",
     )
+    parser.add_argument(
+        "--skip-if-embedding",
+        action="store_true",
+        help="Skip objects that already have embeddings",
+    )
     return parser.parse_args(argv)
 
 
@@ -320,6 +352,7 @@ def main(argv: List[str]) -> int:
         metadata=args.metadata_json,
         trim_before_analysis=args.trim_before_analysis,
         trim_delivery_default=args.trim_delivery_default,
+        skip_if_embedding=args.skip_if_embedding,
     )
 
     print("Batch run finished.")

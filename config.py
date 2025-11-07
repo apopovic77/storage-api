@@ -40,6 +40,15 @@ if not _CHROMA_DB_PATH_ENV:
         pass
     _CHROMA_DB_PATH_ENV = str(default_chroma_dir)
 
+_AI_ANALYSIS_QUEUE_PATH_ENV = os.getenv("AI_ANALYSIS_QUEUE_PATH")
+if not _AI_ANALYSIS_QUEUE_PATH_ENV:
+    default_queue_dir = _DATA_DIR / "logs"
+    try:
+        default_queue_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    _AI_ANALYSIS_QUEUE_PATH_ENV = str(default_queue_dir / "ai_analysis_queue.txt")
+
 class Settings:
     # Database
     DATABASE_URL: str = _DATABASE_URL_ENV
@@ -74,5 +83,6 @@ class Settings:
 
     # Analysis Settings
     ANALYSIS_TIMEOUT: int = int(os.getenv("STORAGE_ANALYSIS_TIMEOUT", "60"))  # seconds
+    AI_ANALYSIS_QUEUE_PATH: str = _AI_ANALYSIS_QUEUE_PATH_ENV
 
 settings = Settings()
