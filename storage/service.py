@@ -1,4 +1,5 @@
 import os
+import shutil
 import aiofiles
 import hashlib
 from pathlib import Path
@@ -433,14 +434,34 @@ class GenericStorageService:
         # Default to tenant-based path for new files
         return tenant_path
 
+    def ensure_tenant_directories(self, tenant_id: str) -> list[str]:
+        created: list[str] = []
+        for base_dir in (self.media_dir, self.thumbnails_dir, self.webview_dir):
+            try:
+                target = base_dir / tenant_id
+                target.mkdir(parents=True, exist_ok=True)
+                created.append(str(target))
+            except Exception:
+                pass
+        return created
+
+    def delete_tenant_directories(self, tenant_id: str) -> list[str]:
+        removed: list[str] = []
+        for base_dir in (self.media_dir, self.thumbnails_dir, self.webview_dir):
+            target = base_dir / tenant_id
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+                removed.append(str(target))
+        return removed
+
     def delete(self, object_key: str, tenant_id: str = "arkturian") -> bool:
         try:
             path = self.absolute_path_for_key(object_key, tenant_id)
+            actual_tenant_id = tenant_id
             if path.exists():
                 path.unlink()
 
                 # Determine which tenant directory the file is in
-                actual_tenant_id = tenant_id
                 if path.parent.name != "media":
                     # File is in a tenant subdirectory
                     actual_tenant_id = path.parent.name
@@ -459,7 +480,6 @@ class GenericStorageService:
             # The directory name is the object_key without extension, in tenant subdirectory
             hls_dir = self.media_dir / actual_tenant_id / path.stem
             if hls_dir.exists() and hls_dir.is_dir():
-                import shutil
                 shutil.rmtree(hls_dir)
 
             return True
