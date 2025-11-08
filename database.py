@@ -155,6 +155,13 @@ async def connect_db():
         print(f"Warning: Database migration failed: {e}")
         # Do not fail startup on migration errors
 
+    try:
+        from tenancy.config import bootstrap_tenant_registry
+
+        bootstrap_tenant_registry()
+    except Exception as exc:
+        print(f"Warning: Tenant registry bootstrap failed: {exc}")
+
 async def disconnect_db():
     """Disconnect from database (for shutdown)"""
     await database.disconnect()

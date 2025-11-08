@@ -64,7 +64,7 @@ def verify_api_key(api_key: str, db: Session) -> Optional[User]:
         return user
 
     # Auto-provision user accounts for API keys defined via tenant config
-    tenant_id = tenant_id_for_api_key(api_key)
+    tenant_id = tenant_id_for_api_key(api_key, db)
     if tenant_id:
         email = f"{tenant_id}@api"
         display_name = tenant_id.replace("_", " ").title()

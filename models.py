@@ -8,6 +8,35 @@ from enum import Enum
 
 Base = declarative_base()
 
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id = Column(String(50), primary_key=True)
+    display_name = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    is_system = Column(Boolean, default=False)
+    default_api_key = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    api_keys = relationship("TenantAPIKey", back_populates="tenant", cascade="all, delete-orphan")
+
+
+class TenantAPIKey(Base):
+    __tablename__ = "tenant_api_keys"
+
+    api_key = Column(String, primary_key=True)
+    tenant_id = Column(String(50), ForeignKey("tenants.id"), index=True, nullable=False)
+    label = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+    tenant = relationship("Tenant", back_populates="api_keys")
+
+
 # SQLAlchemy Models
 class User(Base):
     __tablename__ = "users"

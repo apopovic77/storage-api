@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db
-from models import AsyncTask, StorageObject, User
+from models import AsyncTask, StorageObject, Tenant, TenantAPIKey, User
 from storage.service import generic_storage
-from tenancy.config import list_tenant_keys, upsert_tenant_key, delete_tenant_key
+from tenancy.config import list_tenant_keys, upsert_tenant_key, delete_tenant_key, sync_legacy_snapshot
 
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
@@ -59,24 +59,35 @@ class TenantDeleteResponse(BaseModel):
 
 
 @router.get("/keys")
-def list_keys(current_user: User = Depends(get_current_user)) -> Dict[str, str]:
+def list_keys(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, str]:
     if current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    return list_tenant_keys()
+    return list_tenant_keys(db)
 
 
 @router.post("/keys")
-def upsert_key(req: TenantKeyRequest, current_user: User = Depends(get_current_user)) -> Dict[str, str]:
+def upsert_key(
+    req: TenantKeyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, str]:
     if current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    return upsert_tenant_key(req.api_key, req.tenant_id)
+    return upsert_tenant_key(req.api_key, req.tenant_id, db=db)
 
 
 @router.delete("/keys/{key}")
-def delete_key(key: str, current_user: User = Depends(get_current_user)) -> Dict[str, str]:
+def delete_key(
+    key: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, str]:
     if current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    return delete_tenant_key(key)
+    return delete_tenant_key(key, db=db)
 
 
 @router.get("/status", response_model=TenantStatusResponse)
@@ -98,7 +109,10 @@ def tenant_status(
         .all()
     )
 
-    configured = list_tenant_keys()
+    configured_tenants = {
+        tenant.id: tenant
+        for tenant in db.query(Tenant).filter(Tenant.is_active.is_(True)).all()
+    }
     seen: Dict[str, TenantStatus] = {}
 
     total_objects = 0
@@ -118,8 +132,8 @@ def tenant_status(
         total_objects += status.object_count
         total_bytes += status.total_bytes
 
-    # Ensure tenants with configured keys but no objects are listed
-    for key, tenant_id in configured.items():
+    # Ensure tenants defined in the registry but without objects are listed
+    for tenant_id, tenant in configured_tenants.items():
         if tenant_id not in seen:
             tenants.append(
                 TenantStatus(
@@ -144,6 +158,7 @@ def tenant_status(
 def create_tenant(
     req: TenantCreateRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> TenantCreateResponse:
     if current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -153,13 +168,19 @@ def create_tenant(
         raise HTTPException(status_code=400, detail="tenant_id is required")
     tenant_id = tenant_id.lower()
 
-    configured = list_tenant_keys()
-    if any(value == tenant_id for value in configured.values()):
+    existing_tenant = db.query(Tenant).filter(Tenant.id == tenant_id).one_or_none()
+    if existing_tenant:
         raise HTTPException(status_code=409, detail=f"Tenant '{tenant_id}' already exists")
 
     provided_key = (req.api_key or "").strip()
-    if provided_key and provided_key in configured:
-        raise HTTPException(status_code=409, detail="API key already in use")
+    if provided_key:
+        key_in_use = (
+            db.query(TenantAPIKey)
+            .filter(TenantAPIKey.api_key == provided_key)
+            .one_or_none()
+        )
+        if key_in_use:
+            raise HTTPException(status_code=409, detail="API key already in use")
 
     generated_api_key = False
     api_key = provided_key
@@ -170,7 +191,8 @@ def create_tenant(
         generated_api_key = True
 
     directories = generic_storage.ensure_tenant_directories(tenant_id)
-    upsert_tenant_key(api_key, tenant_id)
+    upsert_tenant_key(api_key, tenant_id, db=db)
+    sync_legacy_snapshot(db)
 
     return TenantCreateResponse(
         tenant_id=tenant_id,
@@ -193,6 +215,10 @@ def delete_tenant(
     if tenant_id in {"arkturian", "oneal"}:
         raise HTTPException(status_code=400, detail="Default tenants cannot be deleted")
 
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+
     objects = db.query(StorageObject).filter(StorageObject.tenant_id == tenant_id).all()
     object_ids = [obj.id for obj in objects]
     deleted_objects = len(objects)
@@ -211,11 +237,15 @@ def delete_tenant(
 
     removed_dirs = generic_storage.delete_tenant_directories(tenant_id)
 
-    removed_keys: List[str] = []
-    for key, tenant in list(list_tenant_keys().items()):
-        if tenant == tenant_id:
-            delete_tenant_key(key)
-            removed_keys.append(key)
+    key_records = db.query(TenantAPIKey).filter(TenantAPIKey.tenant_id == tenant_id).all()
+    removed_keys = [record.api_key for record in key_records]
+    for record in key_records:
+        db.delete(record)
+
+    db.delete(tenant)
+    db.commit()
+
+    sync_legacy_snapshot(db)
 
     return TenantDeleteResponse(
         tenant_id=tenant_id,

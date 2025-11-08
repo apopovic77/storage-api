@@ -1,14 +1,24 @@
 """
-Tenant configuration: map API keys to tenant identifiers.
+Tenant configuration backed by the relational database.
 
-Backed by a JSON file for runtime updates via admin API.
+This module keeps backwards compatibility with the previous JSON-based approach
+by mirroring changes to ``tenant_config.json`` so that legacy tooling continues
+to work, while the database is treated as the canonical source of truth.
 """
 
-from typing import Optional, Dict
-from pathlib import Path
-from fastapi import Header
+from __future__ import annotations
+
 import json
 import os
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Dict, Optional
+
+from fastapi import Header, Depends
+from sqlalchemy.orm import Session
+
+from database import SessionLocal, get_db
+from models import Tenant, TenantAPIKey
 
 
 TENANT_CONFIG_PATH = Path(os.getenv("TENANT_CONFIG_PATH", "./tenant_config.json"))
@@ -18,84 +28,256 @@ _DEFAULT_MAP: Dict[str, str] = {
 }
 
 
-def _load_map() -> Dict[str, str]:
+def _load_legacy_map() -> Dict[str, str]:
+    """Load the legacy JSON mapping (without injecting defaults)."""
     try:
         if TENANT_CONFIG_PATH.exists():
             with open(TENANT_CONFIG_PATH, "r") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                # Normalize keys/values to strings
                 return {str(k): str(v) for k, v in data.items()}
     except Exception:
         pass
-    return dict(_DEFAULT_MAP)
+    return {}
 
 
-def _save_map(map_: Dict[str, str]) -> None:
+def _write_legacy_map(mapping: Dict[str, str]) -> None:
+    """Persist the mapping to the legacy JSON file."""
     try:
         TENANT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    with open(TENANT_CONFIG_PATH, "w") as f:
-        json.dump(map_, f, indent=2, sort_keys=True)
+    try:
+        with open(TENANT_CONFIG_PATH, "w") as f:
+            json.dump(mapping, f, indent=2, sort_keys=True)
+    except Exception as exc:
+        print(f"Warning: Failed to persist tenant_config.json: {exc}")
 
 
-def tenant_id_for_api_key(api_key: Optional[str]) -> Optional[str]:
+@contextmanager
+def _manage_session(db: Optional[Session] = None):
+    if db is not None:
+        yield db
+        return
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def _ensure_tenant(
+    db: Session,
+    tenant_id: str,
+    *,
+    display_name: Optional[str] = None,
+    is_system: bool = False,
+) -> Tenant:
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).one_or_none()
+    if tenant:
+        if display_name and not tenant.display_name:
+            tenant.display_name = display_name
+        if is_system and not tenant.is_system:
+            tenant.is_system = True
+        if not tenant.is_active:
+            tenant.is_active = True
+        return tenant
+
+    tenant = Tenant(
+        id=tenant_id,
+        display_name=display_name or tenant_id.replace("_", " ").title(),
+        is_active=True,
+        is_system=is_system,
+    )
+    db.add(tenant)
+    db.flush()
+    return tenant
+
+
+def _persist_legacy_snapshot(db: Session) -> None:
+    """Mirror the DB state back into the legacy JSON file (best effort)."""
+    try:
+        mapping = list_tenant_keys(db)
+        _write_legacy_map(mapping)
+    except Exception as exc:
+        print(f"Warning: Failed to write tenant_config.json snapshot: {exc}")
+
+
+def tenant_id_for_api_key(api_key: Optional[str], db: Optional[Session] = None) -> Optional[str]:
     if not api_key:
         return None
-    return _load_map().get(api_key)
+
+    with _manage_session(db) as session:
+        key = (
+            session.query(TenantAPIKey)
+            .filter(
+                TenantAPIKey.api_key == api_key,
+                TenantAPIKey.is_active.is_(True),
+            )
+            .one_or_none()
+        )
+        return key.tenant_id if key else None
 
 
-def list_tenant_keys() -> Dict[str, str]:
-    return _load_map()
+def list_tenant_keys(db: Optional[Session] = None) -> Dict[str, str]:
+    with _manage_session(db) as session:
+        rows = (
+            session.query(TenantAPIKey.api_key, TenantAPIKey.tenant_id)
+            .filter(TenantAPIKey.is_active.is_(True))
+            .all()
+        )
+        mapping = {api_key: tenant_id for api_key, tenant_id in rows}
+        return mapping
 
 
-def api_key_for_tenant(tenant_id: str) -> Optional[str]:
-    """Reverse lookup helper to find an API key for a given tenant."""
+def api_key_for_tenant(tenant_id: str, db: Optional[Session] = None) -> Optional[str]:
     if not tenant_id:
         return None
-    for key, value in _load_map().items():
-        if value == tenant_id:
-            return key
-    return None
+    with _manage_session(db) as session:
+        tenant = session.query(Tenant).filter(Tenant.id == tenant_id).one_or_none()
+        if not tenant:
+            return None
+        if tenant.default_api_key:
+            return tenant.default_api_key
+        key = (
+            session.query(TenantAPIKey.api_key)
+            .filter(
+                TenantAPIKey.tenant_id == tenant_id,
+                TenantAPIKey.is_active.is_(True),
+            )
+            .first()
+        )
+        return key[0] if key else None
 
 
-def upsert_tenant_key(api_key: str, tenant_id: str) -> Dict[str, str]:
-    api_key = str(api_key)
-    tenant_id = str(tenant_id)
-    m = _load_map()
-    m[api_key] = tenant_id
-    _save_map(m)
-    return m
+def upsert_tenant_key(
+    api_key: str,
+    tenant_id: str,
+    *,
+    label: Optional[str] = None,
+    db: Optional[Session] = None,
+) -> Dict[str, str]:
+    api_key = str(api_key).strip()
+    tenant_id = str(tenant_id).strip().lower()
+    if not api_key or not tenant_id:
+        raise ValueError("api_key and tenant_id are required")
+
+    with _manage_session(db) as session:
+        try:
+            tenant = _ensure_tenant(session, tenant_id)
+
+            record = session.query(TenantAPIKey).filter(TenantAPIKey.api_key == api_key).one_or_none()
+            if record:
+                record.tenant_id = tenant_id
+                record.is_active = True
+                if label is not None:
+                    record.label = label
+            else:
+                record = TenantAPIKey(api_key=api_key, tenant_id=tenant_id, label=label)
+                session.add(record)
+
+            if not tenant.default_api_key:
+                tenant.default_api_key = api_key
+
+            session.commit()
+            _persist_legacy_snapshot(session)
+        except Exception:
+            session.rollback()
+            raise
+
+    return list_tenant_keys(db)
 
 
-def delete_tenant_key(api_key: str) -> Dict[str, str]:
-    api_key = str(api_key)
-    m = _load_map()
-    if api_key in m:
-        del m[api_key]
-        _save_map(m)
-    return m
+def delete_tenant_key(api_key: str, db: Optional[Session] = None) -> Dict[str, str]:
+    api_key = str(api_key).strip()
+    if not api_key:
+        return list_tenant_keys(db)
+
+    with _manage_session(db) as session:
+        try:
+            record = (
+                session.query(TenantAPIKey)
+                .filter(TenantAPIKey.api_key == api_key)
+                .one_or_none()
+            )
+            if record:
+                tenant = record.tenant
+                session.delete(record)
+                session.flush()
+                if tenant and tenant.default_api_key == api_key:
+                    tenant.default_api_key = None
+            session.commit()
+            _persist_legacy_snapshot(session)
+        except Exception:
+            session.rollback()
+            raise
+
+    return list_tenant_keys(db)
 
 
-def get_tenant_id(api_key: str = Header(None, alias="X-API-KEY")) -> str:
+def bootstrap_tenant_registry() -> None:
+    """Ensure default tenants exist and import legacy mappings."""
+    session = SessionLocal()
+    try:
+        # Seed default tenants/keys
+        for api_key, tenant_id in _DEFAULT_MAP.items():
+            tenant = _ensure_tenant(session, tenant_id, is_system=True)
+            record = (
+                session.query(TenantAPIKey)
+                .filter(TenantAPIKey.api_key == api_key)
+                .one_or_none()
+            )
+            if record:
+                record.tenant_id = tenant_id
+                record.is_active = True
+            else:
+                session.add(
+                    TenantAPIKey(
+                        api_key=api_key,
+                        tenant_id=tenant_id,
+                        label="default",
+                    )
+                )
+            if not tenant.default_api_key:
+                tenant.default_api_key = api_key
+
+        # Import from legacy JSON (if present)
+        for api_key, tenant_id in _load_legacy_map().items():
+            upsert_tenant_key(api_key, tenant_id, db=session)
+
+        session.commit()
+        _persist_legacy_snapshot(session)
+    except Exception as exc:
+        session.rollback()
+        print(f"Warning: Tenant bootstrap failed: {exc}")
+    finally:
+        session.close()
+
+
+def sync_legacy_snapshot(db: Optional[Session] = None) -> None:
+    """Persist the current tenant-key mapping into the legacy JSON file."""
+    with _manage_session(db) as session:
+        _persist_legacy_snapshot(session)
+
+
+def get_tenant_id(
+    api_key: str = Header(None, alias="X-API-KEY"),
+    db: Session = Depends(get_db),
+) -> str:
     """
-    FastAPI Dependency: Extract tenant_id from API key.
-
-    Returns the tenant_id associated with the API key.
-    Defaults to 'arkturian' if no mapping exists.
+    FastAPI dependency: resolve tenant identifier from API key.
+    Defaults to 'arkturian' for backwards compatibility.
     """
-    tenant_id = tenant_id_for_api_key(api_key)
-    if not tenant_id:
-        # Fallback to default tenant for backward compatibility
-        return "arkturian"
-    return tenant_id
+    tenant_id = tenant_id_for_api_key(api_key, db)
+    return tenant_id or "arkturian"
 
-def get_tenant_id_optional(api_key: str = Header(None, alias="X-API-KEY")) -> Optional[str]:
-    """
-    FastAPI Dependency: Extract tenant_id from API key (optional).
 
-    Returns the tenant_id associated with the API key or None if no API key provided.
-    Used for endpoints that support both authenticated and public access.
+def get_tenant_id_optional(
+    api_key: str = Header(None, alias="X-API-KEY"),
+    db: Session = Depends(get_db),
+) -> Optional[str]:
     """
-    return tenant_id_for_api_key(api_key)
+    FastAPI dependency: resolve optional tenant identifier.
+    Returns None when no API key was provided.
+    """
+    return tenant_id_for_api_key(api_key, db)
