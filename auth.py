@@ -83,7 +83,16 @@ def verify_api_key(api_key: str, db: Session) -> Optional[User]:
             return user
         except Exception:
             db.rollback()
-            # Fallback to lookup in case of race condition
+            user = db.query(User).filter(User.email == email).first()
+            if user:
+                try:
+                    user.api_key = api_key
+                    user.last_active_at = datetime.utcnow()
+                    db.commit()
+                    db.refresh(user)
+                    return user
+                except Exception:
+                    db.rollback()
             user = db.query(User).filter(User.api_key == api_key).first()
             if user:
                 return user
