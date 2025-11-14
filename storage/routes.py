@@ -2761,15 +2761,14 @@ def get_media_trim_bounds(
         "point_count": 24
     }
     """
-    from storage.service import get_storage_object_by_id
-
-    tenant_id = current_user.tenant_id if current_user else "public"
-    obj = get_storage_object_by_id(db, object_id, tenant_id)
+    # Get storage object from database
+    obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
 
     if not obj:
         raise HTTPException(status_code=404, detail="Storage object not found")
 
     # Check permissions
+    tenant_id = current_user.tenant_id if current_user else "public"
     if obj.tenant_id != "public":
         if not current_user or current_user.tenant_id != obj.tenant_id:
             raise HTTPException(status_code=403, detail="Access denied")
