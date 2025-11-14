@@ -2730,6 +2730,7 @@ def get_media_trim_bounds(
     simplify: float = Query(0.002, description="Polygon simplification factor (0.001-0.05, lower = more detail)"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
+    tenant_id: Optional[str] = Depends(get_tenant_id_optional),
 ) -> Dict[str, Any]:
     """
     Get trim bounds for an image as JSON.
@@ -2768,9 +2769,8 @@ def get_media_trim_bounds(
         raise HTTPException(status_code=404, detail="Storage object not found")
 
     # Check permissions
-    tenant_id = current_user.tenant_id if current_user else "public"
     if obj.tenant_id != "public":
-        if not current_user or current_user.tenant_id != obj.tenant_id:
+        if not tenant_id or tenant_id != obj.tenant_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
     # Check if it's an image
