@@ -2791,12 +2791,7 @@ def get_media_trim_bounds(
             # Resolve file path
             src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             if not src_path.exists():
-                # Fallback to external resolver
-                from storage.external_proxy import _resolve_external_path
-                src_path_str = _resolve_external_path(obj.file_url)
-                if not src_path_str:
-                    raise HTTPException(status_code=404, detail="Image file not accessible")
-                src_path = Path(src_path_str)
+                raise HTTPException(status_code=404, detail="Image file not accessible")
 
             # Generate trim metadata
             generated_meta = _generate_trim_metadata_from_image(src_path)
@@ -2825,12 +2820,7 @@ def get_media_trim_bounds(
             # Resolve file path
             src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             if not src_path.exists():
-                # Fallback to external resolver
-                from storage.external_proxy import _resolve_external_path
-                src_path_str = _resolve_external_path(obj.file_url)
-                if not src_path_str:
-                    raise HTTPException(status_code=404, detail="Image file not accessible")
-                src_path = Path(src_path_str)
+                raise HTTPException(status_code=404, detail="Image file not accessible")
 
             # Generate polygon contour
             polygon_data = _generate_contour_polygon_from_image(src_path, simplify)
