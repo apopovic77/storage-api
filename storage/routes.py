@@ -2787,13 +2787,9 @@ def get_media_trim_bounds(
 
     # Auto-generate if missing and requested
     if generate and (not stored_trim or not stored_trim.get("normalized")):
-        # Resolve file path
-        from storage.service import get_generic_storage_handler
-        generic_storage = get_generic_storage_handler(tenant_id)
-
         try:
-            # Try local file first
-            src_path = generic_storage.objects_dir / obj.object_key
+            # Resolve file path
+            src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             if not src_path.exists():
                 # Fallback to external resolver
                 from storage.external_proxy import _resolve_external_path
@@ -2825,13 +2821,9 @@ def get_media_trim_bounds(
         if not OPENCV_AVAILABLE:
             raise HTTPException(status_code=501, detail="OpenCV not available - polygon extraction not supported")
 
-        # Resolve file path
-        from storage.service import get_generic_storage_handler
-        generic_storage = get_generic_storage_handler(tenant_id)
-
         try:
-            # Try local file first
-            src_path = generic_storage.objects_dir / obj.object_key
+            # Resolve file path
+            src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
             if not src_path.exists():
                 # Fallback to external resolver
                 from storage.external_proxy import _resolve_external_path
