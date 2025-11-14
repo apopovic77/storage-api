@@ -16,6 +16,104 @@ from datetime import datetime
 
 from PIL import Image
 
+try:
+    import fitz  # type: ignore[import]
+
+    PDF_RENDER_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    fitz = None  # type: ignore[assignment]
+    PDF_RENDER_AVAILABLE = False
+
+DEFAULT_PDF_RENDER_SCALE = 2.0
+
+try:
+    import cv2
+    import numpy as np
+    OPENCV_AVAILABLE = True
+except Exception:
+    cv2 = None  # type: ignore[assignment]
+    np = None  # type: ignore[assignment]
+    OPENCV_AVAILABLE = False
+
+
+def _generate_contour_polygon_from_image(image_path: Path, simplify_factor: float = 0.002) -> Dict[str, Any]:
+    """
+    Compute contour polygon for an image using OpenCV.
+
+    Args:
+        image_path: Path to the image file
+        simplify_factor: Douglas-Peucker simplification factor (0.001-0.05, lower = more detail)
+
+    Returns:
+        Dictionary with polygon data including points and normalized coordinates
+    """
+    if not OPENCV_AVAILABLE:
+        raise ImportError("OpenCV (cv2) is required for polygon extraction")
+
+    # Load image
+    img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError(f"Failed to load image: {image_path}")
+
+    height, width = img.shape[:2]
+
+    # Handle transparency/alpha channel
+    if img.shape[2] == 4:  # Has alpha channel
+        # Use alpha channel as mask
+        alpha = img[:, :, 3]
+        # Threshold alpha to binary mask (non-transparent = foreground)
+        _, mask = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
+    else:
+        # No alpha - try to detect background by edges
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Use Canny edge detection
+        edges = cv2.Canny(gray, 50, 150)
+        # Dilate edges to close gaps
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.dilate(edges, kernel, iterations=2)
+
+    # Find contours
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        # No contours found - return full image rect as polygon
+        points = [[0, 0], [width, 0], [width, height], [0, height]]
+        normalized_points = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        return {
+            "type": "polygon",
+            "width": width,
+            "height": height,
+            "points": points,
+            "normalized_points": normalized_points,
+            "point_count": 4,
+        }
+
+    # Get largest contour (assume it's the main object)
+    largest_contour = max(contours, key=cv2.contourArea)
+
+    # Simplify polygon using Douglas-Peucker algorithm
+    epsilon = simplify_factor * cv2.arcLength(largest_contour, True)
+    simplified_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
+
+    # Convert to list of [x, y] points
+    points = [[int(pt[0][0]), int(pt[0][1])] for pt in simplified_contour]
+
+    # Normalize to 0-1 range
+    normalized_points = [
+        [pt[0] / width if width > 0 else 0.0, pt[1] / height if height > 0 else 0.0]
+        for pt in points
+    ]
+
+    return {
+        "type": "polygon",
+        "width": width,
+        "height": height,
+        "points": points,
+        "normalized_points": normalized_points,
+        "point_count": len(points),
+    }
+
+
 def _generate_trim_metadata_from_image(image_path: Path) -> Dict[str, Any]:
     """Compute trim bounds for a given image file."""
     with Image.open(image_path) as img:
@@ -71,6 +169,57 @@ def _generate_trim_metadata_from_image(image_path: Path) -> Dict[str, Any]:
         trim_meta.setdefault("x2", width)
         trim_meta.setdefault("y2", height)
         return trim_meta
+
+
+def _render_pdf_page_to_image(pdf_path: Path, output_path: Path, width: Optional[int], height: Optional[int]) -> None:
+    if not PDF_RENDER_AVAILABLE:
+        raise RuntimeError("PDF rendering support is not available (PyMuPDF missing)")
+
+    with fitz.open(pdf_path) as doc:
+        if doc.page_count == 0:
+            raise ValueError("PDF contains no pages")
+
+        page = doc.load_page(0)
+        rect = page.rect
+
+        zoom_x = DEFAULT_PDF_RENDER_SCALE
+        zoom_y = DEFAULT_PDF_RENDER_SCALE
+
+        if width and height:
+            zoom_x = max(width / max(rect.width, 1), 0.5)
+            zoom_y = max(height / max(rect.height, 1), 0.5)
+        elif width:
+            zoom_x = zoom_y = max(width / max(rect.width, 1), 0.5)
+        elif height:
+            zoom_x = zoom_y = max(height / max(rect.height, 1), 0.5)
+
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom_x, zoom_y), alpha=False)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        pix.save(str(output_path))
+
+
+def _ensure_pdf_preview(
+    obj: "StorageObject",
+    pdf_path: Path,
+    *,
+    width: Optional[int],
+    height: Optional[int],
+    refresh: bool,
+) -> Path:
+    tenant_id = getattr(obj, "tenant_id", None) or "arkturian"
+    generic_storage.ensure_tenant_directories(tenant_id)
+    preview_dir = generic_storage.webview_dir / tenant_id
+    base_name = Path(getattr(obj, "object_key", "") or f"obj_{getattr(obj, 'id', 'unknown')}").stem
+    size_tag = f"{width or 'auto'}x{height or 'auto'}"
+    preview_path = preview_dir / f"pdfpreview_{base_name}_{size_tag}.png"
+
+    if refresh and preview_path.exists():
+        preview_path.unlink(missing_ok=True)
+
+    if not preview_path.exists():
+        _render_pdf_page_to_image(pdf_path, preview_path, width, height)
+
+    return preview_path
 
 from database import get_db
 from auth import get_current_user, get_current_user_optional, generate_api_key
@@ -2272,23 +2421,11 @@ def get_media_variant(
     if not obj:
         raise HTTPException(status_code=404, detail="Not found")
 
-    mime = (obj.mime_type or "").lower()
-
-    context_meta = obj.ai_context_metadata or {}
-    stored_trim = None
-    if isinstance(context_meta, dict):
-        stored_trim = context_meta.get("trim_bounds")
-
-    if not mime.startswith("image/"):
-        # For non-images, return original file for now
-        path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="File missing")
-        return FileResponse(path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
+    media_type_current = (obj.mime_type or "application/octet-stream")
+    mime = media_type_current.lower()
 
     # Compute source paths
-    # Try local file first
-    src_path = None
+    src_path: Optional[Path] = None
     if obj.object_key:
         src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
 
@@ -2296,24 +2433,19 @@ def get_media_variant(
     if (not src_path or not src_path.exists()) and obj.external_uri:
         import time
 
-        # Create cache directory for external files
         cache_dir = Path("/tmp/share_proxy_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / f"obj_{object_id}"
 
-        # Explicit cache invalidation if requested
         if refresh:
             cache_file.unlink(missing_ok=True)
             meta_candidate = cache_dir / f"obj_{object_id}.meta"
             meta_candidate.unlink(missing_ok=True)
 
-        # Check if cached (24h TTL)
         use_cache = False
         if cache_file.exists():
-            # Disable caching to always fetch the latest external asset
             use_cache = False
 
-        # Download if not cached
         if not use_cache:
             try:
                 with httpx.Client(timeout=30.0) as client:
@@ -2326,9 +2458,37 @@ def get_media_variant(
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"Failed to fetch external URI: {str(e)}")
 
-    # Final check: do we have a valid source path?
     if not src_path or not src_path.exists():
         raise HTTPException(status_code=404, detail="File missing")
+
+    if mime == "application/pdf":
+        if not PDF_RENDER_AVAILABLE:
+            return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
+        try:
+            preview_path = _ensure_pdf_preview(
+                obj,
+                src_path,
+                width=width,
+                height=height,
+                refresh=refresh,
+            )
+            src_path = preview_path
+            mime = "image/png"
+            media_type_current = "image/png"
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to render PDF preview: {exc}")
+
+    context_meta = obj.ai_context_metadata or {}
+    stored_trim = None
+    if isinstance(context_meta, dict):
+        stored_trim = context_meta.get("trim_bounds")
+
+    if not mime.startswith("image/"):
+        return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
+
+    # Compute source paths
+    # Try local file first
+    # (src_path already resolved above)
 
     # Auto-generate trim bounds when explicitly requested or default-enabled but missing
     trim_param_supplied = trim is not None
@@ -2370,11 +2530,12 @@ def get_media_variant(
         target_max_edge: Optional[int],
         requested_width: Optional[int],
         requested_height: Optional[int],
+        base_media_type: str,
     ) -> Response:
         if not stored_trim or not stored_trim.get("applied"):
             return FileResponse(
                 source_path,
-                media_type=obj.mime_type,
+                media_type=base_media_type,
                 headers={"Content-Disposition": "inline"},
             )
 
@@ -2449,7 +2610,7 @@ def get_media_variant(
 
     # Default: if no hints provided, return original (full)
     if not apply_trim and variant is None and display_for is None and not width and not height:
-        return FileResponse(src_path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
+        return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
 
     # Derive a deterministic webview name for medium/custom
     if obj.object_key:
@@ -2488,7 +2649,7 @@ def get_media_variant(
         max_edge = 300
     elif variant == "full":
         if not apply_trim:
-            return FileResponse(src_path, media_type=obj.mime_type, headers={"Content-Disposition": "inline"})
+            return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
         max_edge = None
     else:
         # medium or custom
@@ -2510,7 +2671,7 @@ def get_media_variant(
         dest_path.unlink(missing_ok=True)
 
     if apply_trim:
-        return serve_trimmed_image(src_path, target_format, q, max_edge, width, height)
+        return serve_trimmed_image(src_path, target_format, q, max_edge, width, height, media_type_current)
 
     # If derivative exists, serve it
     if dest_path.exists():
@@ -2559,6 +2720,144 @@ def get_media_variant(
         "webp": "image/webp",
     }.get(suffix, "image/jpeg")
     return FileResponse(dest_path, media_type=media_type, headers={"Content-Disposition": "inline"})
+
+
+@router.get("/media/{object_id}/trim-bounds")
+def get_media_trim_bounds(
+    object_id: int,
+    generate: bool = Query(True, description="Auto-generate trim bounds if missing"),
+    return_type: str = Query("rect", description="rect | polygon - Return bounding rect or contour polygon"),
+    simplify: float = Query(0.002, description="Polygon simplification factor (0.001-0.05, lower = more detail)"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    """
+    Get trim bounds for an image as JSON.
+
+    Returns the trim bounding box coordinates or contour polygon.
+
+    Response format (rect):
+    {
+        "type": "rect",
+        "width": 1920,          // Original image width
+        "height": 1080,         // Original image height
+        "trim_width": 1800,     // Trimmed width
+        "trim_height": 1000,    // Trimmed height
+        "x1": 60,              // Left edge (pixels)
+        "y1": 40,              // Top edge (pixels)
+        "x2": 1860,            // Right edge (pixels)
+        "y2": 1040,            // Bottom edge (pixels)
+        "normalized": [0.03125, 0.037, 0.96875, 0.963],  // [x1, y1, x2, y2] normalized to 0-1
+        "applied": true        // Whether trim was actually needed
+    }
+
+    Response format (polygon):
+    {
+        "type": "polygon",
+        "width": 1920,
+        "height": 1080,
+        "points": [[x1, y1], [x2, y2], ...],  // Pixel coordinates
+        "normalized_points": [[0.05, 0.1], [0.95, 0.1], ...],  // Normalized 0-1
+        "point_count": 24
+    }
+    """
+    from storage.service import get_storage_object_by_id
+
+    tenant_id = current_user.tenant_id if current_user else "public"
+    obj = get_storage_object_by_id(db, object_id, tenant_id)
+
+    if not obj:
+        raise HTTPException(status_code=404, detail="Storage object not found")
+
+    # Check permissions
+    if obj.tenant_id != "public":
+        if not current_user or current_user.tenant_id != obj.tenant_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if it's an image
+    mime = obj.mime_type or ""
+    if not mime.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Object is not an image")
+
+    # Get existing trim bounds from metadata
+    context_meta = obj.ai_context_metadata or {}
+    if not isinstance(context_meta, dict):
+        context_meta = {}
+
+    stored_trim = context_meta.get("trim_bounds")
+
+    # Auto-generate if missing and requested
+    if generate and (not stored_trim or not stored_trim.get("normalized")):
+        # Resolve file path
+        from storage.service import get_generic_storage_handler
+        generic_storage = get_generic_storage_handler(tenant_id)
+
+        try:
+            # Try local file first
+            src_path = generic_storage.objects_dir / obj.object_key
+            if not src_path.exists():
+                # Fallback to external resolver
+                from storage.external_proxy import _resolve_external_path
+                src_path_str = _resolve_external_path(obj.file_url)
+                if not src_path_str:
+                    raise HTTPException(status_code=404, detail="Image file not accessible")
+                src_path = Path(src_path_str)
+
+            # Generate trim metadata
+            generated_meta = _generate_trim_metadata_from_image(src_path)
+
+            if generated_meta:
+                # Save to database
+                context_meta["trim_bounds"] = generated_meta
+                db.query(StorageObject).filter(StorageObject.id == object_id).update(
+                    {"ai_context_metadata": context_meta},
+                    synchronize_session=False
+                )
+                db.commit()
+                stored_trim = generated_meta
+                print(f"✅ Generated trim bounds for object {object_id}")
+        except Exception as exc:
+            db.rollback()
+            print(f"⚠️ Failed to generate trim bounds for object {object_id}: {exc}")
+            raise HTTPException(status_code=500, detail=f"Failed to compute trim bounds: {exc}")
+
+    # Handle polygon request
+    if return_type == "polygon":
+        if not OPENCV_AVAILABLE:
+            raise HTTPException(status_code=501, detail="OpenCV not available - polygon extraction not supported")
+
+        # Resolve file path
+        from storage.service import get_generic_storage_handler
+        generic_storage = get_generic_storage_handler(tenant_id)
+
+        try:
+            # Try local file first
+            src_path = generic_storage.objects_dir / obj.object_key
+            if not src_path.exists():
+                # Fallback to external resolver
+                from storage.external_proxy import _resolve_external_path
+                src_path_str = _resolve_external_path(obj.file_url)
+                if not src_path_str:
+                    raise HTTPException(status_code=404, detail="Image file not accessible")
+                src_path = Path(src_path_str)
+
+            # Generate polygon contour
+            polygon_data = _generate_contour_polygon_from_image(src_path, simplify)
+            return polygon_data
+
+        except ImportError as exc:
+            raise HTTPException(status_code=501, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to compute polygon: {exc}")
+
+    # Default: return rect bounds
+    if not stored_trim:
+        raise HTTPException(status_code=404, detail="Trim bounds not available")
+
+    # Add type field for consistency
+    result = dict(stored_trim)
+    result["type"] = "rect"
+    return result
 
 
 @router.get("/proxy")
