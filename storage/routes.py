@@ -24,6 +24,14 @@ except Exception:  # pragma: no cover - optional dependency
     fitz = None  # type: ignore[assignment]
     PDF_RENDER_AVAILABLE = False
 
+try:
+    from cairosvg import svg2png
+
+    CAIROSVG_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    svg2png = None  # type: ignore[assignment]
+    CAIROSVG_AVAILABLE = False
+
 DEFAULT_PDF_RENDER_SCALE = 2.0
 
 try:
@@ -2710,9 +2718,18 @@ def get_media_variant(
 
     # Generate derivative and persist
     try:
-        from PIL import Image
-        with Image.open(src_path) as img:
-            # Compute target size
+        is_svg_asset = mime in {"image/svg", "image/svg+xml"} or src_path.suffix.lower() == ".svg"
+        if is_svg_asset:
+            if not CAIROSVG_AVAILABLE:
+                raise RuntimeError("CairoSVG not installed for SVG conversion")
+            with open(src_path, "rb") as svg_file:
+                svg_bytes = svg_file.read()
+            raster_bytes = svg2png(bytestring=svg_bytes)  # type: ignore[arg-type]
+            base_image = Image.open(BytesIO(raster_bytes))
+        else:
+            base_image = Image.open(src_path)
+
+        with base_image as img:
             w, h = img.size
             if width and height:
                 target_w, target_h = width, height
