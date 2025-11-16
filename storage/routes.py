@@ -24,6 +24,14 @@ except Exception:  # pragma: no cover - optional dependency
     fitz = None  # type: ignore[assignment]
     PDF_RENDER_AVAILABLE = False
 
+try:
+    from cairosvg import svg2png
+
+    CAIROSVG_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    svg2png = None  # type: ignore[assignment]
+    CAIROSVG_AVAILABLE = False
+
 DEFAULT_PDF_RENDER_SCALE = 2.0
 
 try:
@@ -34,6 +42,65 @@ except Exception:
     cv2 = None  # type: ignore[assignment]
     np = None  # type: ignore[assignment]
     OPENCV_AVAILABLE = False
+
+
+def _resolve_storage_object_path(obj: Any, refresh: bool = False) -> Path:
+    """
+    Resolve file path for a storage object, handling both local and external URIs.
+
+    Args:
+        obj: StorageObject instance
+        refresh: If True, clears cache for external URIs
+
+    Returns:
+        Path to the file (local or cached external)
+
+    Raises:
+        HTTPException: If file cannot be accessed
+    """
+    # Try local file first
+    src_path: Optional[Path] = None
+    if obj.object_key:
+        src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
+
+    # Handle external URIs if local file doesn't exist
+    if (not src_path or not src_path.exists()) and obj.external_uri:
+        cache_dir = Path("/tmp/share_proxy_cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"obj_{obj.id}"
+
+        if refresh:
+            cache_file.unlink(missing_ok=True)
+            meta_candidate = cache_dir / f"obj_{obj.id}.meta"
+            meta_candidate.unlink(missing_ok=True)
+
+        # Download if not cached
+        if not cache_file.exists():
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    response = client.get(obj.external_uri)
+                    if response.status_code == 200:
+                        cache_file.write_bytes(response.content)
+                        src_path = cache_file
+                    else:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Failed to fetch external URI: HTTP {response.status_code}"
+                        )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to fetch external URI: {str(e)}"
+                )
+        else:
+            src_path = cache_file
+
+    if not src_path or not src_path.exists():
+        raise HTTPException(status_code=404, detail="File not accessible")
+
+    return src_path
 
 
 def _generate_contour_polygon_from_image(image_path: Path, simplify_factor: float = 0.002) -> Dict[str, Any]:
@@ -2424,42 +2491,8 @@ def get_media_variant(
     media_type_current = (obj.mime_type or "application/octet-stream")
     mime = media_type_current.lower()
 
-    # Compute source paths
-    src_path: Optional[Path] = None
-    if obj.object_key:
-        src_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id)
-
-    # Handle external URIs if local file doesn't exist
-    if (not src_path or not src_path.exists()) and obj.external_uri:
-        import time
-
-        cache_dir = Path("/tmp/share_proxy_cache")
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f"obj_{object_id}"
-
-        if refresh:
-            cache_file.unlink(missing_ok=True)
-            meta_candidate = cache_dir / f"obj_{object_id}.meta"
-            meta_candidate.unlink(missing_ok=True)
-
-        use_cache = False
-        if cache_file.exists():
-            use_cache = False
-
-        if not use_cache:
-            try:
-                with httpx.Client(timeout=30.0) as client:
-                    response = client.get(obj.external_uri)
-                    if response.status_code == 200:
-                        cache_file.write_bytes(response.content)
-                        src_path = cache_file
-                    else:
-                        raise HTTPException(status_code=502, detail=f"Failed to fetch external URI: HTTP {response.status_code}")
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Failed to fetch external URI: {str(e)}")
-
-    if not src_path or not src_path.exists():
-        raise HTTPException(status_code=404, detail="File missing")
+    # Resolve file path (handles both local and external URIs)
+    src_path = _resolve_storage_object_path(obj, refresh=refresh)
 
     if mime == "application/pdf":
         if not PDF_RENDER_AVAILABLE:
@@ -2685,9 +2718,18 @@ def get_media_variant(
 
     # Generate derivative and persist
     try:
-        from PIL import Image
-        with Image.open(src_path) as img:
-            # Compute target size
+        is_svg_asset = mime in {"image/svg", "image/svg+xml"} or src_path.suffix.lower() == ".svg"
+        if is_svg_asset:
+            if not CAIROSVG_AVAILABLE:
+                raise RuntimeError("CairoSVG not installed for SVG conversion")
+            with open(src_path, "rb") as svg_file:
+                svg_bytes = svg_file.read()
+            raster_bytes = svg2png(bytestring=svg_bytes)  # type: ignore[arg-type]
+            base_image = Image.open(BytesIO(raster_bytes))
+        else:
+            base_image = Image.open(src_path)
+
+        with base_image as img:
             w, h = img.size
             if width and height:
                 target_w, target_h = width, height
@@ -2730,6 +2772,7 @@ def get_media_trim_bounds(
     simplify: float = Query(0.002, description="Polygon simplification factor (0.001-0.05, lower = more detail)"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
+    tenant_id: Optional[str] = Depends(get_tenant_id_optional),
 ) -> Dict[str, Any]:
     """
     Get trim bounds for an image as JSON.
@@ -2770,7 +2813,7 @@ def get_media_trim_bounds(
     # Check permissions
     tenant_id = current_user.tenant_id if current_user else "public"
     if obj.tenant_id != "public":
-        if not current_user or current_user.tenant_id != obj.tenant_id:
+        if not tenant_id or tenant_id != obj.tenant_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
     # Check if it's an image
@@ -2787,20 +2830,9 @@ def get_media_trim_bounds(
 
     # Auto-generate if missing and requested
     if generate and (not stored_trim or not stored_trim.get("normalized")):
-        # Resolve file path
-        from storage.service import get_generic_storage_handler
-        generic_storage = get_generic_storage_handler(tenant_id)
-
         try:
-            # Try local file first
-            src_path = generic_storage.objects_dir / obj.object_key
-            if not src_path.exists():
-                # Fallback to external resolver
-                from storage.external_proxy import _resolve_external_path
-                src_path_str = _resolve_external_path(obj.file_url)
-                if not src_path_str:
-                    raise HTTPException(status_code=404, detail="Image file not accessible")
-                src_path = Path(src_path_str)
+            # Resolve file path (handles both local and external URIs)
+            src_path = _resolve_storage_object_path(obj)
 
             # Generate trim metadata
             generated_meta = _generate_trim_metadata_from_image(src_path)
@@ -2825,20 +2857,9 @@ def get_media_trim_bounds(
         if not OPENCV_AVAILABLE:
             raise HTTPException(status_code=501, detail="OpenCV not available - polygon extraction not supported")
 
-        # Resolve file path
-        from storage.service import get_generic_storage_handler
-        generic_storage = get_generic_storage_handler(tenant_id)
-
         try:
-            # Try local file first
-            src_path = generic_storage.objects_dir / obj.object_key
-            if not src_path.exists():
-                # Fallback to external resolver
-                from storage.external_proxy import _resolve_external_path
-                src_path_str = _resolve_external_path(obj.file_url)
-                if not src_path_str:
-                    raise HTTPException(status_code=404, detail="Image file not accessible")
-                src_path = Path(src_path_str)
+            # Resolve file path (handles both local and external URIs)
+            src_path = _resolve_storage_object_path(obj)
 
             # Generate polygon contour
             polygon_data = _generate_contour_polygon_from_image(src_path, simplify)
