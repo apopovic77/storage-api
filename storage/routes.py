@@ -44,6 +44,72 @@ except Exception:
     OPENCV_AVAILABLE = False
 
 
+def _parse_aspect_ratio_value(raw_value: Optional[str]) -> Optional[float]:
+    """
+    Convert an aspect ratio string (e.g. "1:1" or "1.0") into a float width/height ratio.
+    Returns None when the parameter is empty.
+    """
+    if not raw_value:
+        return None
+    value = raw_value.strip()
+    if not value:
+        return None
+    try:
+        if ":" in value:
+            left, right = value.split(":", 1)
+            numerator = float(left)
+            denominator = float(right)
+        else:
+            numerator = float(value)
+            denominator = 1.0
+    except (TypeError, ValueError) as exc:  # pragma: no cover - validation guard
+        raise ValueError("expected aspect_ratio like '1:1' or '1.0'") from exc
+    if numerator <= 0 or denominator <= 0:
+        raise ValueError("aspect_ratio values must be positive")
+    return numerator / denominator
+
+
+def _apply_letterbox_aspect_ratio(image: Image.Image, desired_ratio: Optional[float], target_format: str) -> Image.Image:
+    """
+    Pad an image with transparent (PNG/WebP) or white (JPEG) background
+    to achieve the requested aspect ratio without stretching.
+    """
+    if not desired_ratio:
+        return image
+
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return image
+
+    current_ratio = width / height
+    if abs(current_ratio - desired_ratio) < 1e-3:
+        return image
+
+    if current_ratio > desired_ratio:
+        final_width = width
+        final_height = max(int(round(width / desired_ratio)), 1)
+    else:
+        final_height = height
+        final_width = max(int(round(height * desired_ratio)), 1)
+
+    supports_alpha = target_format not in {"jpg", "jpeg"}
+    canvas_mode = "RGBA" if supports_alpha else "RGB"
+    background_color = (255, 255, 255, 0) if supports_alpha else (255, 255, 255)
+    canvas = Image.new(canvas_mode, (final_width, final_height), background_color)
+
+    paste_img = image
+    if paste_img.mode != canvas_mode:
+        paste_img = paste_img.convert(canvas_mode)
+
+    offset_x = (final_width - width) // 2
+    offset_y = (final_height - height) // 2
+    if supports_alpha and paste_img.mode in {"RGBA", "LA"}:
+        canvas.paste(paste_img, (offset_x, offset_y), paste_img)
+    else:
+        canvas.paste(paste_img, (offset_x, offset_y))
+    return canvas
+
+
 def _resolve_storage_object_path(obj: Any, refresh: bool = False) -> Path:
     """
     Resolve file path for a storage object, handling both local and external URIs.
@@ -2466,6 +2532,10 @@ def get_media_variant(
     display_for: Optional[str] = Query(None, description="e.g., figma-feed | web | print"),
     width: Optional[int] = Query(None, ge=1),
     height: Optional[int] = Query(None, ge=1),
+    aspect_ratio: Optional[str] = Query(
+        None,
+        description="Optional canvas aspect ratio (e.g., '1:1' or '16:9') applied via letterboxing without stretching",
+    ),
     format: Optional[str] = Query(None, description="jpg | png | webp"),
     quality: Optional[int] = Query(None, ge=1, le=100),
     trim: Optional[bool] = Query(None, description="Set true to crop using stored trim bounds (if available)"),
@@ -2482,6 +2552,11 @@ def get_media_variant(
     - If variant == full: stream original file.
     - width/height/format/quality can override defaults and will materialize a persistent derivative in webview dir.
     """
+    try:
+        target_aspect_ratio_value = _parse_aspect_ratio_value(aspect_ratio)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid aspect_ratio: {exc}") from exc
+
     # Public endpoint - allow access to any storage object by globally unique ID
     obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
 
@@ -2564,6 +2639,7 @@ def get_media_variant(
         requested_width: Optional[int],
         requested_height: Optional[int],
         base_media_type: str,
+        target_aspect_ratio: Optional[float],
     ) -> Response:
         if not stored_trim or not stored_trim.get("applied"):
             return FileResponse(
@@ -2593,7 +2669,17 @@ def get_media_variant(
             w, h = img.size
 
             if requested_width and requested_height:
-                target_w, target_h = requested_width, requested_height
+                if target_aspect_ratio:
+                    source_ratio = (w / float(h)) if h else 1.0
+                    bounding_ratio = requested_width / float(requested_height)
+                    if source_ratio >= bounding_ratio:
+                        target_w = requested_width
+                        target_h = max(int(round(requested_width / max(source_ratio, 1e-9))), 1)
+                    else:
+                        target_h = requested_height
+                        target_w = max(int(round(requested_height * source_ratio)), 1)
+                else:
+                    target_w, target_h = requested_width, requested_height
             elif target_max_edge:
                 if w >= h:
                     target_w = min(target_max_edge, w)
@@ -2606,6 +2692,8 @@ def get_media_variant(
 
             if target_w > 0 and target_h > 0 and (target_w != w or target_h != h):
                 img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            img = _apply_letterbox_aspect_ratio(img, target_aspect_ratio, target_format_value)
 
             save_format = {
                 "jpg": "JPEG",
@@ -2697,14 +2785,26 @@ def get_media_variant(
 
     # Prepare destination path for derivative
     suffix = "jpg" if target_format in {"jpg", "jpeg"} else target_format
-    dest_name = f"web_{base_name}_{max_edge}e_q{q}.{suffix}"
+    aspect_ratio_token = (
+        f"_ar{int(round(target_aspect_ratio_value * 1000))}" if target_aspect_ratio_value else ""
+    )
+    dest_name = f"web_{base_name}_{max_edge}e{aspect_ratio_token}_q{q}.{suffix}"
     dest_path = generic_storage.webview_dir / dest_name
 
     if refresh and dest_path.exists():
         dest_path.unlink(missing_ok=True)
 
     if apply_trim:
-        return serve_trimmed_image(src_path, target_format, q, max_edge, width, height, media_type_current)
+        return serve_trimmed_image(
+            src_path,
+            target_format,
+            q,
+            max_edge,
+            width,
+            height,
+            media_type_current,
+            target_aspect_ratio_value,
+        )
 
     # If derivative exists, serve it
     if dest_path.exists():
@@ -2732,7 +2832,17 @@ def get_media_variant(
         with base_image as img:
             w, h = img.size
             if width and height:
-                target_w, target_h = width, height
+                if target_aspect_ratio_value:
+                    source_ratio = (w / float(h)) if h else 1.0
+                    bounding_ratio = width / float(height)
+                    if source_ratio >= bounding_ratio:
+                        target_w = width
+                        target_h = max(int(round(width / max(source_ratio, 1e-9))), 1)
+                    else:
+                        target_h = height
+                        target_w = max(int(round(height * source_ratio)), 1)
+                else:
+                    target_w, target_h = width, height
             elif max_edge:
                 if w >= h:
                     target_w = max_edge
@@ -2745,6 +2855,7 @@ def get_media_variant(
 
             out = img.convert("RGB") if img.mode in ("RGBA", "LA", "P") and target_format in {"jpg", "jpeg"} else img.copy()
             out = out.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            out = _apply_letterbox_aspect_ratio(out, target_aspect_ratio_value, target_format)
             save_kwargs = {}
             if target_format in {"jpg", "jpeg"}:
                 save_kwargs = {"quality": q, "optimize": True}
