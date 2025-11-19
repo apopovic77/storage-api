@@ -144,14 +144,26 @@ class ExternalProxyCache:
 
     def _evict_if_needed(self, new_file_size: int):
         """Evict old files if cache is full."""
-        # Get all cached files sorted by access time (LRU)
-        cache_files = sorted(
-            self.cache_dir.glob("*"),
-            key=lambda p: p.stat().st_atime if p.is_file() and not p.name.endswith('.meta') else 0
-        )
+        now = datetime.now()
+        ttl_seconds = max(self.ttl_hours * 3600, 0)
 
-        # Filter only data files (not .meta)
-        cache_files = [f for f in cache_files if f.is_file() and not f.name.endswith('.meta')]
+        def is_old(path: Path) -> bool:
+            try:
+                age = now.timestamp() - path.stat().st_atime
+                return age >= ttl_seconds
+            except Exception:
+                return False
+
+        cache_files = [f for f in self.cache_dir.glob("*") if f.is_file() and not f.name.endswith('.meta')]
+
+        # Remove stale entries based on TTL/5-day rule
+        stale_files = [f for f in cache_files if is_old(f)]
+        for stale in stale_files:
+            meta_file = self.cache_dir / f"{stale.name}.meta"
+            stale.unlink(missing_ok=True)
+            meta_file.unlink(missing_ok=True)
+        if stale_files:
+            print(f"🧹 Cache cleanup: removed {len(stale_files)} stale entries")
 
         # Calculate current cache size
         total_size = sum(f.stat().st_size for f in cache_files)
