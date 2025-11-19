@@ -1620,6 +1620,7 @@ async def upload_file(
     ai_tasks: Optional[str] = Form(None),  # CSV/JSON list of steps: safety,vision,product,embedding,kg,notify
     ai_vision_mode: Optional[str] = Form(None),  # auto|generic|product
     ai_context_role: Optional[str] = Form(None),  # product|lifestyle|doc|other
+    reuse_existing: bool = Form(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
