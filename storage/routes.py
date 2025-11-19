@@ -461,6 +461,7 @@ def get_media_cache_status(
     qualities: Optional[List[int]] = Query(None, alias="quality", description="Optional quality overrides"),
     image_format: str = Query("webp", description="Derivative format to inspect"),
     include_original: bool = Query(True, description="Include original file status"),
+    reuse_existing: bool = Form(False),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
     tenant_id: Optional[str] = Depends(get_tenant_id_optional),
@@ -1789,15 +1790,16 @@ async def upload_file(
             return StorageObjectResponse.from_orm(saved_obj)
         else:
             # Normal upload logic
-            # Check for existing file to update
-            existing_q = db.query(StorageObject).filter(
-                StorageObject.owner_user_id == target_owner_id,
-                StorageObject.original_filename == file.filename,
-                StorageObject.tenant_id == tenant_id,
-            )
-            if context:
-                existing_q = existing_q.filter(StorageObject.context == context)
-            existing = existing_q.order_by(StorageObject.created_at.desc()).first()
+            existing = None
+            if reuse_existing:
+                existing_q = db.query(StorageObject).filter(
+                    StorageObject.owner_user_id == target_owner_id,
+                    StorageObject.original_filename == file.filename,
+                    StorageObject.tenant_id == tenant_id,
+                )
+                if context:
+                    existing_q = existing_q.filter(StorageObject.context == context)
+                existing = existing_q.order_by(StorageObject.created_at.desc()).first()
 
             # Build AI context metadata from parameters
             ai_context_metadata = {}
