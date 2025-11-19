@@ -454,34 +454,31 @@ class GenericStorageService:
                 removed.append(str(target))
         return removed
 
+    def _delete_physical_assets(self, path: Path, tenant_id: str) -> None:
+        """Delete original file and derived assets (thumbs/webview/HLS)."""
+        if path.exists():
+            path.unlink()
+
+        actual_tenant_id = tenant_id
+        if path.parent.name != "media":
+            actual_tenant_id = path.parent.name
+
+        thumb = self.thumbnails_dir / actual_tenant_id / f"thumb_{path.stem}.jpg"
+        if thumb.exists():
+            thumb.unlink()
+
+        web = self.webview_dir / actual_tenant_id / f"web_{path.stem}{path.suffix}"
+        if web.exists():
+            web.unlink()
+
+        hls_dir = self.media_dir / actual_tenant_id / path.stem
+        if hls_dir.exists() and hls_dir.is_dir():
+            shutil.rmtree(hls_dir, ignore_errors=True)
+
     def delete(self, object_key: str, tenant_id: str = "arkturian") -> bool:
         try:
             path = self.absolute_path_for_key(object_key, tenant_id)
-            actual_tenant_id = tenant_id
-            if path.exists():
-                path.unlink()
-
-                # Determine which tenant directory the file is in
-                if path.parent.name != "media":
-                    # File is in a tenant subdirectory
-                    actual_tenant_id = path.parent.name
-
-                # Delete thumbnail in tenant subdirectory
-                t = self.thumbnails_dir / actual_tenant_id / f"thumb_{path.stem}.jpg"
-                if t.exists():
-                    t.unlink()
-
-                # Delete webview in tenant subdirectory
-                w = self.webview_dir / actual_tenant_id / f"web_{path.stem}{path.suffix}"
-                if w.exists():
-                    w.unlink()
-
-            # Also delete extracted HLS directory for pre-transcoded videos
-            # The directory name is the object_key without extension, in tenant subdirectory
-            hls_dir = self.media_dir / actual_tenant_id / path.stem
-            if hls_dir.exists() and hls_dir.is_dir():
-                shutil.rmtree(hls_dir)
-
+            self._delete_physical_assets(path, tenant_id)
             return True
         except Exception:
             pass
@@ -492,6 +489,13 @@ class GenericStorageService:
             raise ValueError("File too large")
 
         file_path = self.absolute_path_for_key(object_key, tenant_id)
+        # Remove existing assets to avoid stale cache
+        if file_path.exists():
+            self._delete_physical_assets(file_path, tenant_id)
+
+        # Ensure parent dir exists before writing
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
         mime = self._detect_mime_type(data, file_path.name)
 
         async with aiofiles.open(file_path, "wb") as f:
