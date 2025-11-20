@@ -1622,15 +1622,40 @@ async def upload_file(
     ai_context_role: Optional[str] = Form(None),  # product|lifestyle|doc|other
     reuse_existing: bool = Form(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    api_key_header: str = Security(_APIKeyHeader(name="X-API-KEY", auto_error=True)),
-    tenant_id: str = Depends(get_tenant_id),
+    current_user: Optional[User] = Depends(get_current_user),
+    api_key_header: Optional[str] = Security(_APIKeyHeader(name="X-API-KEY", auto_error=False)),
+    tenant_id: Optional[str] = Depends(get_tenant_id),
 ):
     data = await file.read()
     try:
-        # Resolve target owner
-        target_owner_id = current_user.id
-        if owner_email:
+        # Special handling for HLS results: get tenant/owner from original video
+        if reference_id and hls_result:
+            print(f"📦 HLS Result Upload: reference_id={reference_id}, getting tenant from original video")
+            try:
+                reference_id_int = int(reference_id)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail=f"Invalid reference_id format: {reference_id}")
+
+            # Find original video to get tenant and owner
+            original_video = db.query(StorageObject).filter(StorageObject.id == reference_id_int).first()
+            if not original_video:
+                raise HTTPException(status_code=404, detail=f"Original video {reference_id} not found")
+
+            # Use tenant and owner from original video
+            tenant_id = original_video.tenant_id
+            target_owner_id = original_video.owner_user_id
+            print(f"📦 Using tenant '{tenant_id}' and owner {target_owner_id} from original video {reference_id_int}")
+        else:
+            # Normal upload: require authentication
+            if not current_user:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            if not tenant_id:
+                raise HTTPException(status_code=400, detail="Tenant ID required")
+
+            # Resolve target owner
+            target_owner_id = current_user.id
+
+        if owner_email and not (reference_id and hls_result):
             if current_user.trust_level != "admin":
                 raise HTTPException(status_code=403, detail="Only admin may set owner_email")
             owner = db.query(User).filter(User.email == owner_email).first()
@@ -1667,21 +1692,8 @@ async def upload_file(
 
         # Handle Mac transcoding completion: process HLS ZIP and add to original video
         print(f"🔍 DEBUG: reference_id={reference_id}, context={context}, hls_result={hls_result}")
-        if reference_id:
-            print(f"📦 Mac HLS transcoding: looking for original video {reference_id}")
-            # Convert reference_id to int for DB query
-            try:
-                reference_id_int = int(reference_id)
-            except (ValueError, TypeError) as e:
-                raise HTTPException(status_code=400, detail=f"Invalid reference_id format: {reference_id}")
-
-            original_video = db.query(StorageObject).filter(
-                StorageObject.id == reference_id_int,
-                StorageObject.tenant_id == tenant_id
-            ).first()
-            if not original_video:
-                raise HTTPException(status_code=404, detail=f"Original video {reference_id} not found")
-            
+        if reference_id and hls_result:
+            # original_video was already loaded above when getting tenant/owner
             print(f"📦 Found original video: {original_video.original_filename}")
             print(f"📦 Processing HLS ZIP: {file.filename}")
             
