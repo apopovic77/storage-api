@@ -1669,8 +1669,14 @@ async def upload_file(
         print(f"🔍 DEBUG: reference_id={reference_id}, context={context}, hls_result={hls_result}")
         if reference_id:
             print(f"📦 Mac HLS transcoding: looking for original video {reference_id}")
+            # Convert reference_id to int for DB query
+            try:
+                reference_id_int = int(reference_id)
+            except (ValueError, TypeError) as e:
+                raise HTTPException(status_code=400, detail=f"Invalid reference_id format: {reference_id}")
+
             original_video = db.query(StorageObject).filter(
-                StorageObject.id == reference_id,
+                StorageObject.id == reference_id_int,
                 StorageObject.tenant_id == tenant_id
             ).first()
             if not original_video:
@@ -1697,8 +1703,8 @@ async def upload_file(
                 if not temp_zip.metadata_json:
                     temp_zip.metadata_json = {}
                 temp_zip.metadata_json['is_hls_result'] = True
-                temp_zip.metadata_json['original_video_id'] = reference_id
-                print(f"📦 Created temporary HLS ZIP: {temp_zip.id} -> will extract to original video {reference_id}")
+                temp_zip.metadata_json['original_video_id'] = reference_id_int
+                print(f"📦 Created temporary HLS ZIP: {temp_zip.id} -> will extract to original video {reference_id_int}")
             
             db.commit()
             db.refresh(temp_zip)
