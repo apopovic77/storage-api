@@ -440,6 +440,20 @@ class MediaCacheStatus(BaseModel):
     message: Optional[str] = None
 
 
+class CacheClearResult(BaseModel):
+    object_id: int
+    success: bool
+    files_deleted: int = 0
+    message: Optional[str] = None
+
+
+class CacheClearResponse(BaseModel):
+    total_objects: int
+    successful: int
+    failed: int
+    results: List[CacheClearResult]
+
+
 def _resolve_quality_for_width(width: int) -> int:
     return 85 if width >= 1000 else 75
 
@@ -586,6 +600,130 @@ def get_media_cache_status(
         )
 
     return response
+
+
+@router.post("/media/clear-cache", response_model=CacheClearResponse)
+def clear_media_cache(
+    object_ids: List[int] = Query(..., alias="object_id", description="List of storage object IDs to clear cache for"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    tenant_id: Optional[str] = Depends(get_tenant_id_optional),
+):
+    """
+    Clear cached derivatives for one or more storage objects.
+
+    This endpoint removes all cached derivative images (thumbnails, web-optimized versions, etc.)
+    for the specified storage object IDs. Original files are not affected.
+
+    Args:
+        object_ids: List of storage object IDs to clear cache for
+
+    Returns:
+        CacheClearResponse with detailed results for each object
+    """
+    unique_ids = list(dict.fromkeys(int(oid) for oid in object_ids if int(oid) > 0))
+    if not unique_ids:
+        raise HTTPException(status_code=400, detail="No valid object IDs provided")
+
+    results: List[CacheClearResult] = []
+    successful = 0
+    failed = 0
+
+    for object_id in unique_ids:
+        files_deleted = 0
+        message = None
+        success = True
+
+        try:
+            # Get the storage object
+            record = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+
+            if not record:
+                results.append(
+                    CacheClearResult(
+                        object_id=object_id,
+                        success=False,
+                        files_deleted=0,
+                        message="Object not found",
+                    )
+                )
+                failed += 1
+                continue
+
+            # Check tenant access
+            if tenant_id and record.tenant_id and record.tenant_id != tenant_id:
+                results.append(
+                    CacheClearResult(
+                        object_id=object_id,
+                        success=False,
+                        files_deleted=0,
+                        message="Object belongs to different tenant",
+                    )
+                )
+                failed += 1
+                continue
+
+            # Build derivative name pattern
+            base_name = Path(record.object_key).stem if record.object_key else f"ext_{object_id}"
+            tenant_slug = record.tenant_id or tenant_id or ""
+
+            # Search patterns for derivative files
+            # Format: web_{basename}_{width}e_q{quality}.{format}
+            patterns = [
+                f"web_{base_name}_*",
+            ]
+
+            # Check in webview directory and tenant subdirectory
+            search_paths = [generic_storage.webview_dir]
+            if tenant_slug:
+                search_paths.append(generic_storage.webview_dir / tenant_slug)
+
+            for search_path in search_paths:
+                if not search_path.exists():
+                    continue
+
+                for pattern in patterns:
+                    for file_path in search_path.glob(pattern):
+                        try:
+                            if file_path.is_file():
+                                file_path.unlink()
+                                files_deleted += 1
+                        except Exception as e:
+                            # Log but continue with other files
+                            pass
+
+            if files_deleted > 0:
+                message = f"Cleared {files_deleted} cached derivative(s)"
+            else:
+                message = "No cached derivatives found"
+
+            results.append(
+                CacheClearResult(
+                    object_id=object_id,
+                    success=True,
+                    files_deleted=files_deleted,
+                    message=message,
+                )
+            )
+            successful += 1
+
+        except Exception as e:
+            results.append(
+                CacheClearResult(
+                    object_id=object_id,
+                    success=False,
+                    files_deleted=0,
+                    message=f"Error: {str(e)}",
+                )
+            )
+            failed += 1
+
+    return CacheClearResponse(
+        total_objects=len(unique_ids),
+        successful=successful,
+        failed=failed,
+        results=results,
+    )
 
 
 @router.get("/similar/{object_id}", response_model=SimilarityResponse)
