@@ -3,8 +3,8 @@ name: Deploy Storage API
 on:
   push:
     branches:
-      - dev          # Auto-deploy to staging (arkturian.com)
-      - main         # Manual deploy to production
+      - dev          # Auto-deploy to staging (arkserver.arkturian.com)
+      - main         # Manual deploy to production (arkserver.arkturian.com)
   pull_request:
     branches:
       - main
@@ -50,13 +50,13 @@ jobs:
           fi
 
   deploy-staging:
-    name: Deploy to Staging (arkturian.com)
+    name: Deploy to Staging (arkserver.arkturian.com)
     needs: test
     if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.ENABLE_STAGING_DEPLOY == 'true'
     runs-on: ubuntu-latest
     environment:
       name: staging
-      url: https://api-storage.arkturian.com
+      url: https://api-storage.arkserver.arkturian.com
 
     steps:
       - name: Checkout code
@@ -113,61 +113,10 @@ jobs:
             sleep 5
             systemctl status storage-api.service --no-pager
 
-      - name: Deploy to Staging Server (secondary)
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.DEPLOY_HOST_ALT }}
-          port: ${{ secrets.DEPLOY_PORT_ALT || secrets.DEPLOY_PORT }}
-          username: ${{ secrets.DEPLOY_USER_ALT || secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
-          script: |
-            set -euo pipefail
-            apt-get update -y
-            apt-get install -y ca-certificates python3-venv
-            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-            echo "🚀 Deploying to staging (secondary)..."
-            TARGET_DIR="/var/www/api-storage.arkturian.com"
-            if [ -d /var/www/storage-api ]; then
-              TARGET_DIR="/var/www/storage-api"
-            elif [ -d /var/www/api-storage ]; then
-              TARGET_DIR="/var/www/api-storage"
-            fi
-            cd "$TARGET_DIR"
-            git config --global --add safe.directory "$TARGET_DIR"
-            if [ ! -d .git ]; then
-              git init
-            fi
-            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
-            git fetch origin
-            DATA_DIR="/var/lib/storage-api"
-            mkdir -p "$DATA_DIR/chroma_db"
-            for item in storage.db storage.db-shm storage.db-wal; do
-              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
-                cp -a "$item" "$DATA_DIR/$item"
-              fi
-            done
-            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
-                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
-            fi
-            git clean -fdx -e .env
-            git checkout dev
-            git reset --hard origin/dev
-            rm -rf venv
-            python3 -m venv venv --upgrade-deps
-            source venv/bin/activate
-            pip install --upgrade pip certifi
-            rm -rf ~/.cache/pip
-            pip install --no-cache-dir -r requirements.txt
-            systemctl restart storage-api.service
-            sleep 5
-            systemctl status storage-api.service --no-pager
-
       - name: Health Check
         run: |
           sleep 10
-          curl -f https://api-storage.arkturian.com/health || exit 1
+          curl -f https://api-storage.arkserver.arkturian.com/health || exit 1
 
   deploy-production:
     name: Deploy to Production
@@ -176,6 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
+      url: https://api-storage.arkserver.arkturian.com
 
     steps:
       - name: Checkout code
@@ -196,57 +146,6 @@ jobs:
             export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
             export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to production..."
-            TARGET_DIR="/var/www/api-storage"
-            if [ -d /var/www/storage-api ]; then
-              TARGET_DIR="/var/www/storage-api"
-            elif [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
-              TARGET_DIR="/var/www/api-storage.arkturian.com"
-            fi
-            cd "$TARGET_DIR"
-            git config --global --add safe.directory "$TARGET_DIR"
-            if [ ! -d .git ]; then
-              git init
-            fi
-            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
-            git fetch origin
-            DATA_DIR="/var/lib/storage-api"
-            mkdir -p "$DATA_DIR/chroma_db"
-            for item in storage.db storage.db-shm storage.db-wal; do
-              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
-                cp -a "$item" "$DATA_DIR/$item"
-              fi
-            done
-            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
-                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
-            fi
-            git clean -fdx -e .env
-            git checkout main
-            git reset --hard origin/main
-            rm -rf venv
-            python3 -m venv venv --upgrade-deps
-            source venv/bin/activate
-            pip install --upgrade pip certifi
-            rm -rf ~/.cache/pip
-            pip install --no-cache-dir -r requirements.txt
-            systemctl restart storage-api.service
-            sleep 5
-            systemctl status storage-api.service --no-pager
-
-      - name: Deploy to Production Server (secondary)
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.DEPLOY_HOST_ALT }}
-          port: ${{ secrets.DEPLOY_PORT_ALT || secrets.DEPLOY_PORT }}
-          username: ${{ secrets.DEPLOY_USER_ALT || secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
-          script: |
-            set -euo pipefail
-            apt-get update -y
-            apt-get install -y ca-certificates python3-venv
-            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-            echo "🚀 Deploying to production (secondary)..."
             TARGET_DIR="/var/www/api-storage"
             if [ -d /var/www/storage-api ]; then
               TARGET_DIR="/var/www/storage-api"
