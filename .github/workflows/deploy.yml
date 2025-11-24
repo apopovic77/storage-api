@@ -73,7 +73,9 @@ jobs:
             set -euo pipefail
             echo "🚀 Deploying to staging..."
             TARGET_DIR="/var/www/api-storage.arkturian.com"
-            if [ -d /var/www/api-storage ]; then
+            if [ -d /var/www/storage-api ]; then
+              TARGET_DIR="/var/www/storage-api"
+            elif [ -d /var/www/api-storage ]; then
               TARGET_DIR="/var/www/api-storage"
             fi
             cd "$TARGET_DIR"
@@ -112,7 +114,9 @@ jobs:
             set -euo pipefail
             echo "🚀 Deploying to staging (secondary)..."
             TARGET_DIR="/var/www/api-storage.arkturian.com"
-            if [ -d /var/www/api-storage ]; then
+            if [ -d /var/www/storage-api ]; then
+              TARGET_DIR="/var/www/storage-api"
+            elif [ -d /var/www/api-storage ]; then
               TARGET_DIR="/var/www/api-storage"
             fi
             cd "$TARGET_DIR"
@@ -168,7 +172,9 @@ jobs:
             set -euo pipefail
             echo "🚀 Deploying to production..."
             TARGET_DIR="/var/www/api-storage"
-            if [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
+            if [ -d /var/www/storage-api ]; then
+              TARGET_DIR="/var/www/storage-api"
+            elif [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
               TARGET_DIR="/var/www/api-storage.arkturian.com"
             fi
             cd "$TARGET_DIR"
@@ -207,7 +213,9 @@ jobs:
             set -euo pipefail
             echo "🚀 Deploying to production (secondary)..."
             TARGET_DIR="/var/www/api-storage"
-            if [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
+            if [ -d /var/www/storage-api ]; then
+              TARGET_DIR="/var/www/storage-api"
+            elif [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
               TARGET_DIR="/var/www/api-storage.arkturian.com"
             fi
             cd "$TARGET_DIR"
