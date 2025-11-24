@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles(**/requirements.txt) }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -52,7 +52,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging (arkturian.com)
     needs: test
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.ENABLE_STAGING_DEPLOY == 'true'
+    if: github.ref == refs/heads/dev && github.event_name == push && vars.ENABLE_STAGING_DEPLOY == true
     runs-on: ubuntu-latest
     environment:
       name: staging
@@ -62,7 +62,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy to Staging Server
+      - name: Deploy to Staging Server (primary)
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -101,6 +101,46 @@ jobs:
             sleep 5
             systemctl status storage-api.service --no-pager
 
+      - name: Deploy to Staging Server (secondary)
+        if: ${{ secrets.DEPLOY_HOST_ALT !=  }}
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST_ALT }}
+          port: ${{ secrets.DEPLOY_PORT_ALT || secrets.DEPLOY_PORT }}
+          username: ${{ secrets.DEPLOY_USER_ALT || secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            echo "🚀 Deploying to staging (secondary)..."
+            TARGET_DIR="/var/www/api-storage.arkturian.com"
+            if [ -d /var/www/api-storage ]; then
+              TARGET_DIR="/var/www/api-storage"
+            fi
+            cd "$TARGET_DIR"
+            git config --global --add safe.directory "$TARGET_DIR"
+            if [ ! -d .git ]; then
+              git init
+            fi
+            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
+            git fetch origin
+            DATA_DIR="/var/lib/storage-api"
+            mkdir -p "$DATA_DIR/chroma_db"
+            for item in storage.db storage.db-shm storage.db-wal; do
+              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
+                cp -a "$item" "$DATA_DIR/$item"
+              fi
+            done
+            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
+                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
+            fi
+            git clean -fdx -e .env
+            git checkout dev
+            git reset --hard origin/dev
+            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            systemctl restart storage-api.service
+            sleep 5
+            systemctl status storage-api.service --no-pager
+
       - name: Health Check
         run: |
           sleep 10
@@ -109,7 +149,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    if: github.ref == refs/heads/main && github.event_name == push && vars.ENABLE_PRODUCTION_DEPLOY == true
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -118,7 +158,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy to Production Servers
+      - name: Deploy to Production Server (primary)
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -128,6 +168,46 @@ jobs:
           script: |
             set -euo pipefail
             echo "🚀 Deploying to production..."
+            TARGET_DIR="/var/www/api-storage"
+            if [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
+              TARGET_DIR="/var/www/api-storage.arkturian.com"
+            fi
+            cd "$TARGET_DIR"
+            git config --global --add safe.directory "$TARGET_DIR"
+            if [ ! -d .git ]; then
+              git init
+            fi
+            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
+            git fetch origin
+            DATA_DIR="/var/lib/storage-api"
+            mkdir -p "$DATA_DIR/chroma_db"
+            for item in storage.db storage.db-shm storage.db-wal; do
+              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
+                cp -a "$item" "$DATA_DIR/$item"
+              fi
+            done
+            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
+                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
+            fi
+            git clean -fdx -e .env
+            git checkout main
+            git reset --hard origin/main
+            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            systemctl restart storage-api.service
+            sleep 5
+            systemctl status storage-api.service --no-pager
+
+      - name: Deploy to Production Server (secondary)
+        if: ${{ secrets.DEPLOY_HOST_ALT !=  }}
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST_ALT }}
+          port: ${{ secrets.DEPLOY_PORT_ALT || secrets.DEPLOY_PORT }}
+          username: ${{ secrets.DEPLOY_USER_ALT || secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            echo "🚀 Deploying to production (secondary)..."
             TARGET_DIR="/var/www/api-storage"
             if [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
               TARGET_DIR="/var/www/api-storage.arkturian.com"
