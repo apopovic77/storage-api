@@ -112,11 +112,7 @@ jobs:
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
-
-      - name: Health Check
-        run: |
-          sleep 10
-          curl -f https://api-storage.arkserver.arkturian.com/health || exit 1
+            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { echo "Health check failed"; journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
 
   deploy-production:
     name: Deploy to Production
@@ -181,3 +177,4 @@ jobs:
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
+            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { echo "Health check failed"; journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
