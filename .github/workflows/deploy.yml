@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles(**/requirements.txt) }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -52,7 +52,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging (arkturian.com)
     needs: test
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.ENABLE_STAGING_DEPLOY == 'true'
+    if: github.ref == refs/heads/dev && github.event_name == push && vars.ENABLE_STAGING_DEPLOY == true
     runs-on: ubuntu-latest
     environment:
       name: staging
@@ -62,7 +62,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy to Staging Server
+      - name: Deploy to Staging Server (primary)
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -148,7 +148,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    if: github.ref == refs/heads/main && github.event_name == push && vars.ENABLE_PRODUCTION_DEPLOY == true
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -157,7 +157,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy to Production Servers
+      - name: Deploy to Production Server (primary)
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.DEPLOY_HOST }}
