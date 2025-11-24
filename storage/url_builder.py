@@ -98,4 +98,17 @@ def get_base_url_from_request(request: Request) -> str:
     if forwarded_host:
         host = forwarded_host
 
+    # Clean up host: remove leading/trailing slashes or protocol prefixes
+    if host:
+        host = host.strip()
+        # Remove leading slashes
+        host = host.lstrip("/")
+        # Remove protocol if accidentally included
+        if host.startswith("http://"):
+            host = host[7:]
+        elif host.startswith("https://"):
+            host = host[8:]
+        # Remove trailing slashes
+        host = host.rstrip("/")
+
     return f"{scheme}://{host}"
