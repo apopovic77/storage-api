@@ -22,6 +22,7 @@ from models import Tenant, TenantAPIKey
 
 
 TENANT_CONFIG_PATH = Path(os.getenv("TENANT_CONFIG_PATH", "./tenant_config.json"))
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "arkturian")
 _DEFAULT_MAP: Dict[str, str] = {
     "Inetpass1": "arkturian",
     "oneal_demo_token": "oneal",  # O'Neal tenant access
@@ -269,7 +270,7 @@ def get_tenant_id(
     Defaults to 'arkturian' for backwards compatibility.
     """
     tenant_id = tenant_id_for_api_key(api_key, db)
-    return tenant_id or "arkturian"
+    return tenant_id or DEFAULT_TENANT_ID
 
 
 def get_tenant_id_optional(
@@ -280,4 +281,4 @@ def get_tenant_id_optional(
     FastAPI dependency: resolve optional tenant identifier.
     Returns None when no API key was provided.
     """
-    return tenant_id_for_api_key(api_key, db)
+    return tenant_id_for_api_key(api_key, db) or DEFAULT_TENANT_ID
