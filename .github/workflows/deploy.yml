@@ -74,6 +74,8 @@ jobs:
             apt-get update -y
             apt-get install -y ca-certificates python3-venv
             export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to staging..."
             TARGET_DIR="/var/www/api-storage.arkturian.com"
             if [ -d /var/www/storage-api ]; then
@@ -122,6 +124,8 @@ jobs:
             apt-get update -y
             apt-get install -y ca-certificates python3-venv
             export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to staging (secondary)..."
             TARGET_DIR="/var/www/api-storage.arkturian.com"
             if [ -d /var/www/storage-api ]; then
@@ -187,6 +191,8 @@ jobs:
             apt-get update -y
             apt-get install -y ca-certificates python3-venv
             export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to production..."
             TARGET_DIR="/var/www/api-storage"
             if [ -d /var/www/storage-api ]; then
@@ -235,6 +241,8 @@ jobs:
             apt-get update -y
             apt-get install -y ca-certificates python3-venv
             export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to production (secondary)..."
             TARGET_DIR="/var/www/api-storage"
             if [ -d /var/www/storage-api ]; then
