@@ -1,0 +1,131 @@
+name: Deploy Storage API (Customer Host)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch/tag/SHA) to deploy"
+        required: false
+        default: "main"
+  push:
+    branches:
+      - customer-release
+    tags:
+      - "customer/v*"
+
+env:
+  PYTHON_VERSION: "3.11"
+  DEPLOY_REF: ${{ inputs.ref || github.sha }}
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run tests
+        run: |
+          if [ -d tests ]; then
+            pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
+          else
+            echo "No tests directory present. Skipping pytest step."
+          fi
+
+  deploy-customer:
+    name: Deploy to Customer (arkturian.com)
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: customer
+      url: https://api-storage.arkturian.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Deploy to Customer Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.CUSTOMER_DEPLOY_HOST || secrets.DEPLOY_HOST_ALT }}
+          port: ${{ secrets.CUSTOMER_DEPLOY_PORT || secrets.DEPLOY_PORT_ALT || secrets.DEPLOY_PORT }}
+          username: ${{ secrets.CUSTOMER_DEPLOY_USER || secrets.DEPLOY_USER_ALT || secrets.DEPLOY_USER }}
+          key: ${{ secrets.CUSTOMER_DEPLOY_SSH_KEY || secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            apt-get update -y
+            apt-get install -y ca-certificates python3-venv
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+            echo "🚀 Deploying to customer host..."
+            REF="${{ env.DEPLOY_REF }}"
+            TARGET_DIR="/var/www/api-storage.arkturian.com"
+            if [ -d /var/www/storage-api ]; then
+              TARGET_DIR="/var/www/storage-api"
+            elif [ -d /var/www/api-storage ]; then
+              TARGET_DIR="/var/www/api-storage"
+            fi
+            cd "$TARGET_DIR"
+            git config --global --add safe.directory "$TARGET_DIR"
+            if [ ! -d .git ]; then
+              git init
+            fi
+            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
+            git fetch origin
+            # Protect local data dirs if present
+            DATA_DIR="/var/lib/storage-api"
+            mkdir -p "$DATA_DIR/chroma_db"
+            for item in storage.db storage.db-shm storage.db-wal; do
+              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
+                cp -a "$item" "$DATA_DIR/$item"
+              fi
+            done
+            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
+                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
+            fi
+            git clean -fdx -e .env
+            # Deploy the exact ref requested by the workflow
+            TARGET_REF="$REF"
+            if git show-ref --verify --quiet "refs/remotes/origin/$REF"; then
+              TARGET_REF="origin/$REF"
+            elif ! git rev-parse --verify --quiet "$REF"; then
+              TARGET_REF="origin/main"
+            fi
+            git checkout --detach
+            git reset --hard "$TARGET_REF"
+            rm -rf venv
+            python3 -m venv venv --upgrade-deps
+            source venv/bin/activate
+            pip install --upgrade pip certifi
+            rm -rf ~/.cache/pip
+            pip install --no-cache-dir -r requirements.txt
+            systemctl restart storage-api.service
+            sleep 5
+            systemctl status storage-api.service --no-pager
+            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { echo "Health check failed"; journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
