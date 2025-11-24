@@ -98,9 +98,10 @@ jobs:
             git clean -fdx -e .env
             git checkout dev
             git reset --hard origin/dev
-            python3 -m venv venv || true
+            rm -rf venv
+            python3 -m venv venv
             source venv/bin/activate
-            pip install --upgrade pip
+            pip install --upgrade pip certifi
             pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
@@ -142,9 +143,10 @@ jobs:
             git clean -fdx -e .env
             git checkout dev
             git reset --hard origin/dev
-            python3 -m venv venv || true
+            rm -rf venv
+            python3 -m venv venv
             source venv/bin/activate
-            pip install --upgrade pip
+            pip install --upgrade pip certifi
             pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
@@ -203,9 +205,10 @@ jobs:
             git clean -fdx -e .env
             git checkout main
             git reset --hard origin/main
-            python3 -m venv venv || true
+            rm -rf venv
+            python3 -m venv venv
             source venv/bin/activate
-            pip install --upgrade pip
+            pip install --upgrade pip certifi
             pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
@@ -247,9 +250,10 @@ jobs:
             git clean -fdx -e .env
             git checkout main
             git reset --hard origin/main
-            python3 -m venv venv || true
+            rm -rf venv
+            python3 -m venv venv
             source venv/bin/activate
-            pip install --upgrade pip
+            pip install --upgrade pip certifi
             pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
