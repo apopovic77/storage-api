@@ -107,7 +107,8 @@ jobs:
             python3 -m venv venv --upgrade-deps
             source venv/bin/activate
             pip install --upgrade pip certifi
-            pip install -r requirements.txt
+            rm -rf ~/.cache/pip
+            pip install --no-cache-dir -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -157,7 +158,8 @@ jobs:
             python3 -m venv venv --upgrade-deps
             source venv/bin/activate
             pip install --upgrade pip certifi
-            pip install -r requirements.txt
+            rm -rf ~/.cache/pip
+            pip install --no-cache-dir -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -224,7 +226,8 @@ jobs:
             python3 -m venv venv --upgrade-deps
             source venv/bin/activate
             pip install --upgrade pip certifi
-            pip install -r requirements.txt
+            rm -rf ~/.cache/pip
+            pip install --no-cache-dir -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -274,7 +277,8 @@ jobs:
             python3 -m venv venv --upgrade-deps
             source venv/bin/activate
             pip install --upgrade pip certifi
-            pip install -r requirements.txt
+            rm -rf ~/.cache/pip
+            pip install --no-cache-dir -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
