@@ -71,6 +71,9 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -euo pipefail
+            apt-get update -y
+            apt-get install -y ca-certificates python3-venv
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to staging..."
             TARGET_DIR="/var/www/api-storage.arkturian.com"
             if [ -d /var/www/storage-api ]; then
@@ -116,6 +119,9 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
           script: |
             set -euo pipefail
+            apt-get update -y
+            apt-get install -y ca-certificates python3-venv
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to staging (secondary)..."
             TARGET_DIR="/var/www/api-storage.arkturian.com"
             if [ -d /var/www/storage-api ]; then
@@ -178,6 +184,9 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -euo pipefail
+            apt-get update -y
+            apt-get install -y ca-certificates python3-venv
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to production..."
             TARGET_DIR="/var/www/api-storage"
             if [ -d /var/www/storage-api ]; then
@@ -223,6 +232,9 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY_ALT || secrets.DEPLOY_SSH_KEY }}
           script: |
             set -euo pipefail
+            apt-get update -y
+            apt-get install -y ca-certificates python3-venv
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
             echo "🚀 Deploying to production (secondary)..."
             TARGET_DIR="/var/www/api-storage"
             if [ -d /var/www/storage-api ]; then
