@@ -98,7 +98,7 @@ jobs:
             git clean -fdx -e .env
             git checkout dev
             git reset --hard origin/dev
-            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            python3 -m pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -139,7 +139,7 @@ jobs:
             git clean -fdx -e .env
             git checkout dev
             git reset --hard origin/dev
-            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            python3 -m pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -197,7 +197,7 @@ jobs:
             git clean -fdx -e .env
             git checkout main
             git reset --hard origin/main
-            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            python3 -m pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -238,7 +238,7 @@ jobs:
             git clean -fdx -e .env
             git checkout main
             git reset --hard origin/main
-            /root/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            python3 -m pip install -r requirements.txt
             systemctl restart storage-api.service
             sleep 5
             systemctl status storage-api.service --no-pager
