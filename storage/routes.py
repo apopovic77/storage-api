@@ -1,5 +1,5 @@
 from fastapi import BackgroundTasks
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -368,6 +368,7 @@ from fastapi.security.api_key import APIKeyHeader as _APIKeyHeader
 from storage.domain import save_file_and_record, update_file_and_record
 from storage.service import generic_storage, bulk_delete_objects, GenericStorageService
 from storage.external_proxy import fetch_external_file, external_cache
+from storage.url_builder import build_storage_urls, get_base_url_from_request
 from admin import routes as admin_routes
 from tenancy.config import tenant_id_for_api_key, get_tenant_id, get_tenant_id_optional
 
@@ -2783,12 +2784,19 @@ def get_media_variant(
         finally:
             context_meta = obj.ai_context_metadata or {}
 
-    # Thumbnail path (existing convention)
-    # Use object_key if available, otherwise use object_id for external URIs
-    if obj.object_key:
-        thumb_path = generic_storage.thumbnails_dir / f"thumb_{Path(obj.object_key).stem}.jpg"
+    # Thumbnail path - now uses tenant subdirectories
+    # Check metadata_json for thumbnail_filename first (new system)
+    thumb_filename = None
+    if obj.metadata_json and obj.metadata_json.get("thumbnail_filename"):
+        thumb_filename = obj.metadata_json["thumbnail_filename"]
+    elif obj.object_key:
+        # Fallback to old naming convention for backwards compatibility
+        thumb_filename = f"thumb_{Path(obj.object_key).stem}.jpg"
     else:
-        thumb_path = generic_storage.thumbnails_dir / f"thumb_ext_{object_id}.jpg"
+        thumb_filename = f"thumb_ext_{object_id}.jpg"
+
+    # Thumbnails are now stored in tenant subdirectories
+    thumb_path = generic_storage.thumbnails_dir / tenant_id / thumb_filename if thumb_filename else None
 
     def serve_trimmed_image(
         source_path: Path,
@@ -2942,13 +2950,14 @@ def get_media_variant(
     if apply_trim and variant is None and display_for is None and not width and not height:
         max_edge = None
 
-    # Prepare destination path for derivative
+    # Prepare destination path for derivative (in tenant subdirectory)
     suffix = "jpg" if target_format in {"jpg", "jpeg"} else target_format
     aspect_ratio_token = (
         f"_ar{int(round(target_aspect_ratio_value * 1000))}" if target_aspect_ratio_value else ""
     )
     dest_name = f"web_{base_name}_{max_edge}e{aspect_ratio_token}_q{q}.{suffix}"
-    dest_path = generic_storage.webview_dir / dest_name
+    # Webview derivatives are now stored in tenant subdirectories
+    dest_path = generic_storage.webview_dir / tenant_id / dest_name
 
     if refresh and dest_path.exists():
         dest_path.unlink(missing_ok=True)
@@ -3306,6 +3315,7 @@ def get_object_metadata(
 
 @router.get("/list", response_model=StorageListResponse)
 def list_objects(
+    request: Request,
     mine: bool = True,
     context: Optional[str] = None,
     collection_id: Optional[str] = None,
@@ -3351,11 +3361,29 @@ def list_objects(
 
     results = q.order_by(StorageObject.created_at.desc()).limit(limit).all()
 
+    # Get base URL from request for dynamic URL building
+    base_url = get_base_url_from_request(request)
+
     response_items: List[StorageObjectResponse] = []
     for storage_obj, owner_email in results:
         response_obj = StorageObjectResponse.from_orm(storage_obj)
         # Add owner_email to the response
         response_obj.owner_email = owner_email
+
+        # Build URLs dynamically based on object ID and current request
+        urls = build_storage_urls(
+            object_id=storage_obj.id,
+            tenant_id=storage_obj.tenant_id,
+            checksum=storage_obj.checksum,
+            metadata_json=storage_obj.metadata_json,
+            base_url=base_url,
+            storage_mode=storage_obj.storage_mode,
+            stored_file_url=storage_obj.file_url if storage_obj.file_url else None,
+        )
+        response_obj.file_url = urls["file_url"]
+        response_obj.thumbnail_url = urls["thumbnail_url"]
+        response_obj.webview_url = urls["webview_url"]
+
         # Check for HLS files if this is a video or pre-transcoded zip
         if (storage_obj.mime_type and storage_obj.mime_type.startswith("video/")) or \
            (storage_obj.mime_type and storage_obj.mime_type in ["application/zip", "application/x-zip-compressed"] and

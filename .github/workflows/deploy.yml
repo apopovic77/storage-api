@@ -119,21 +119,37 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: arkserver
+            host_secret: DEPLOY_HOST
+            port_secret: DEPLOY_PORT
+            user_secret: DEPLOY_USER
+            key_secret: DEPLOY_SSH_KEY
+            url: https://api-storage.arkserver.arkturian.com
+          - name: arkturian
+            host_secret: DEPLOY_HOST_ALT
+            port_secret: DEPLOY_PORT_ALT
+            user_secret: DEPLOY_USER_ALT
+            key_secret: DEPLOY_SSH_KEY_ALT
+            url: https://api-storage.arkturian.com
     environment:
       name: production
-      url: https://api-storage.arkserver.arkturian.com
+      url: ${{ matrix.target.url }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy to Production Server (primary)
+      - name: Deploy to Production Server (${{ matrix.target.name }})
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets[matrix.target.host_secret] }}
+          port: ${{ secrets[matrix.target.port_secret] || 22 }}
+          username: ${{ secrets[matrix.target.user_secret] }}
+          key: ${{ secrets[matrix.target.key_secret] }}
           script: |
             set -euo pipefail
             apt-get update -y
@@ -141,7 +157,7 @@ jobs:
             export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
             export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
             export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-            echo "🚀 Deploying to production..."
+            echo "🚀 Deploying to production (${{ matrix.target.name }})..."
             TARGET_DIR="/var/www/api-storage"
             if [ -d /var/www/storage-api ]; then
               TARGET_DIR="/var/www/storage-api"

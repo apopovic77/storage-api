@@ -94,14 +94,21 @@ async def save_file_and_record(
             tenant_id=tenant_id or "arkturian",
         )
 
+    # Build metadata_json with thumbnail/webview filenames (URLs are built dynamically)
+    metadata = {}
+    if saved.get("thumbnail_filename"):
+        metadata["thumbnail_filename"] = saved["thumbnail_filename"]
+    if saved.get("webview_filename"):
+        metadata["webview_filename"] = saved["webview_filename"]
+
     storage_obj = StorageObject(
         owner_user_id=owner_user_id,
         tenant_id=tenant_id or "arkturian",
         object_key=saved["object_key"],
         original_filename=saved["original_filename"],
-        file_url=saved["file_url"],
-        thumbnail_url=saved.get("thumbnail_url"),
-        webview_url=saved.get("webview_url"),
+        file_url="",  # URLs are built dynamically - no longer stored
+        thumbnail_url=None,  # URLs are built dynamically - no longer stored
+        webview_url=None,  # URLs are built dynamically - no longer stored
         mime_type=saved["mime_type"],
         file_size_bytes=saved["file_size_bytes"],
         checksum=saved["checksum"],
@@ -117,7 +124,7 @@ async def save_file_and_record(
         bit_rate=saved.get("bit_rate"),
         latitude=saved.get("latitude"),
         longitude=saved.get("longitude"),
-        metadata_json={},
+        metadata_json=metadata,
         storage_mode=storage_mode,
         reference_path=reference_path,
         external_uri=external_uri,

@@ -286,17 +286,13 @@ class GenericStorageService:
         except Exception as e:
             print(f"Metadata extraction failed for {filename}: {e}")
 
-        thumb_url = None
-        if thumb_path and thumb_path.exists():
-            thumb_url = f"{settings.BASE_URL}/uploads/storage/thumbnails/{tenant_id}/{thumb_path.name}"
+        # Store thumbnail and webview filenames (not URLs - those are built dynamically)
+        thumb_filename = thumb_path.name if thumb_path and thumb_path.exists() else None
+        webview_filename = webview_path.name if webview_path and webview_path.exists() else None
 
-        webview_url = None
-        if webview_path and webview_path.exists():
-            webview_url = f"https://vod.arkturian.com/webview/{tenant_id}/{webview_path.name}"
-        
         return {
-            "thumbnail_url": thumb_url,
-            "webview_url": webview_url,
+            "thumbnail_filename": thumb_filename,
+            "webview_filename": webview_filename,
             "width": width,
             "height": height,
             "duration_seconds": duration,
@@ -320,20 +316,9 @@ class GenericStorageService:
         checksum = self._checksum(data)
         metadata = await self._extract_metadata(file_path, mime, tenant_id)
 
-        # Append cache-busting version to URLs
-        def _with_version(url: Optional[str]) -> Optional[str]:
-            if not url:
-                return url
-            return f"{url}{'&' if '?' in url else '?'}v={checksum}"
-        versioned_file_url = f"{settings.BASE_URL}/uploads/storage/media/{tenant_id}/{filename}?v={checksum}"
-        if metadata.get("thumbnail_url"):
-            metadata["thumbnail_url"] = _with_version(metadata["thumbnail_url"])
-        if metadata.get("webview_url"):
-            metadata["webview_url"] = _with_version(metadata["webview_url"])
-
+        # No longer storing URLs - they will be built dynamically by the API
         return {
             "object_key": filename,
-            "file_url": versioned_file_url,
             "original_filename": original_filename,
             "file_size_bytes": len(data),
             "mime_type": mime,
