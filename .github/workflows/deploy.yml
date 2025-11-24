@@ -178,3 +178,16 @@ jobs:
             sleep 5
             systemctl status storage-api.service --no-pager
             curl -fsS --max-time 10 http://127.0.0.1:8001/health || { echo "Health check failed"; journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
+
+  trigger-sdk-regeneration:
+    name: Trigger SDK Regeneration
+    needs: deploy-production
+    if: github.ref == 'refs/heads/main' && success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger C# SDK regeneration
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: apopovic77/storage-api-csharp-sdk
+          event-type: openapi-updated
