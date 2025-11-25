@@ -19,6 +19,9 @@ from io import BytesIO
 
 import httpx
 from PIL import Image
+from storage.pillow_plugins import ensure_heif_support
+
+ensure_heif_support()
 from sqlalchemy.orm import Session
 
 from config import settings

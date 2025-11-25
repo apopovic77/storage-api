@@ -16,6 +16,9 @@ except Exception:
     magic = None
 from typing import Optional, Tuple, Dict, Any
 from PIL import Image
+from storage.pillow_plugins import ensure_heif_support
+
+ensure_heif_support()
 import piexif
 
 from storage.external_proxy import fetch_external_file

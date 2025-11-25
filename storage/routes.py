@@ -15,6 +15,9 @@ from io import BytesIO
 from datetime import datetime
 
 from PIL import Image
+from storage.pillow_plugins import ensure_heif_support
+
+ensure_heif_support()
 
 try:
     import fitz  # type: ignore[import]
