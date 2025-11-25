@@ -4491,3 +4491,62 @@ async def get_object_data_uri(
         "mime_type": mime_type,
         "object_id": object_id
     }
+
+
+@router.post("/transcode/callback")
+async def transcoding_callback(
+    job_id: str = Body(...),
+    status: str = Body(...),
+    storage_object_id: int = Body(...),
+    output_dir: Optional[str] = Body(None),
+    error: Optional[str] = Body(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Callback endpoint for transcoding API to report job completion
+    """
+    print(f"📨 Transcoding callback: job_id={job_id}, status={status}, storage_object_id={storage_object_id}")
+    
+    try:
+        # Get storage object
+        storage_obj = db.query(StorageObject).filter(StorageObject.id == storage_object_id).first()
+        
+        if not storage_obj:
+            print(f"⚠️  Storage object {storage_object_id} not found")
+            raise HTTPException(status_code=404, detail="Storage object not found")
+        
+        # Update transcoding status
+        if status == "completed":
+            storage_obj.transcoding_status = "completed"
+            storage_obj.transcoding_progress = 100
+            storage_obj.transcoding_error = None
+            
+            # Update metadata with output directory
+            if output_dir:
+                metadata = storage_obj.metadata_json or {}
+                metadata["transcoding_output_dir"] = output_dir
+                storage_obj.metadata_json = metadata
+            
+            print(f"✅ Transcoding completed for storage object {storage_object_id}")
+            
+        elif status == "failed":
+            storage_obj.transcoding_status = "failed"
+            storage_obj.transcoding_error = error or "Unknown error"
+            print(f"❌ Transcoding failed for storage object {storage_object_id}: {error}")
+            
+        else:
+            storage_obj.transcoding_status = status
+            print(f"🔄 Transcoding status updated: {status}")
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Status updated to {status}",
+            "storage_object_id": storage_object_id
+        }
+        
+    except Exception as e:
+        print(f"❌ Callback error: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

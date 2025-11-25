@@ -1265,7 +1265,8 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         
                         if mac_available:
                             # Submit to Mac for transcoding
-                            callback_url = f"https://api.arkturian.com/transcode/callback"
+                            from config import settings
+                            callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
                             job_id = mac_transcoding_client.submit_job(
                                 str(file_path), 
                                 file_size, 
@@ -1322,7 +1323,8 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         
                         if mac_available:
                             # Submit to Mac for transcoding
-                            callback_url = f"https://api.arkturian.com/transcode/callback"
+                            from config import settings
+                            callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
                             job_id = mac_transcoding_client.submit_job(
                                 str(file_path), 
                                 file_size, 

@@ -89,5 +89,6 @@ class Settings:
     TRANSCODING_MODE: str = os.getenv("TRANSCODING_MODE", "local")  # local, remote, disabled
     TRANSCODING_API_URL: Optional[str] = os.getenv("TRANSCODING_API_URL")
     TRANSCODING_API_KEY: Optional[str] = os.getenv("TRANSCODING_API_KEY")
+    TRANSCODING_CALLBACK_URL: Optional[str] = os.getenv("TRANSCODING_CALLBACK_URL")  # Callback URL for transcoding status updates
 
 settings = Settings()
