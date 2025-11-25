@@ -98,6 +98,10 @@ def get_base_url_from_request(request: Request) -> str:
     if forwarded_host:
         host = forwarded_host
 
+    # DEBUG: Log raw values
+    import sys
+    print(f"[URL_BUILDER DEBUG] scheme={repr(scheme)}, host={repr(host)}, forwarded_proto={repr(forwarded_proto)}, forwarded_host={repr(forwarded_host)}", file=sys.stderr)
+
     # Clean scheme: remove any trailing slashes, backslashes, or colons
     if scheme:
         scheme = scheme.strip().rstrip(":/\\")
@@ -115,4 +119,6 @@ def get_base_url_from_request(request: Request) -> str:
         # Remove trailing slashes and backslashes
         host = host.rstrip("/\\")
 
-    return f"{scheme}://{host}"
+    result = f"{scheme}://{host}"
+    print(f"[URL_BUILDER DEBUG] Final result: {repr(result)}", file=sys.stderr)
+    return result
