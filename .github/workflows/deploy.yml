@@ -183,8 +183,8 @@ jobs:
             git reset --hard origin/main
 
             # Production uses pyenv Python 3.11.9
-            $HOME/.pyenv/versions/3.11.9/bin/pip install --upgrade pip
-            $HOME/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
+            ~/.pyenv/versions/3.11.9/bin/pip install --upgrade pip
+            ~/.pyenv/versions/3.11.9/bin/pip install -r requirements.txt
 
             systemctl restart storage-api.service
             systemctl restart transcoding-api.service || true
