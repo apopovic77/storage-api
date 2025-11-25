@@ -14,6 +14,7 @@ from storage import routes as storage_routes
 from tenancy import routes as tenant_routes
 from admin import routes as admin_routes
 from database import connect_db, disconnect_db
+from config import settings
 
 app = FastAPI(
     title="Storage API",
@@ -33,7 +34,7 @@ async def shutdown():
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

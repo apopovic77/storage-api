@@ -91,4 +91,10 @@ class Settings:
     TRANSCODING_API_KEY: Optional[str] = os.getenv("TRANSCODING_API_KEY")
     TRANSCODING_CALLBACK_URL: Optional[str] = os.getenv("TRANSCODING_CALLBACK_URL")  # Callback URL for transcoding status updates
 
+    # CORS Settings
+    CORS_ORIGINS: list = os.getenv(
+        "CORS_ORIGINS",
+        "https://admin.arkturian.com,https://admin.arkserver.arkturian.com,http://localhost:3000,http://localhost:8080"
+    ).split(",")
+
 settings = Settings()
