@@ -373,6 +373,16 @@ from admin import routes as admin_routes
 from tenancy.config import tenant_id_for_api_key, get_tenant_id, get_tenant_id_optional
 
 
+def build_hls_url(tenant_id: str, basename: str) -> str:
+    """
+    Build HLS URL using VOD_BASE_URL from settings.
+    Auto-derives vod domain from api-storage domain (e.g., api-storage.arkserver.arkturian.com -> vod.arkserver.arkturian.com)
+    """
+    from config import settings
+    vod_base = settings.VOD_BASE_URL
+    return f"{vod_base}/media/{tenant_id}/{basename}/master.m3u8"
+
+
 router = APIRouter()
 admin_router = APIRouter(prefix="/admin")
 
@@ -1877,7 +1887,7 @@ async def upload_file(
                 
                 if validation_result["valid"]:
                     # Update original video with HLS URL (prefer VOD domain for playback)
-                    hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{hls_extract_dir.name}/master.m3u8"
+                    hls_url = build_hls_url(tenant_id, hls_extract_dir.name)
                     original_video.hls_url = hls_url
                     
                     if validation_result.get("width"):
@@ -2452,7 +2462,7 @@ def get_asset_variant_references(
             hls_dir_path = path.parent / basename
             master = hls_dir_path / "master.m3u8"
             if master.exists():
-                hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
+                hls_url = build_hls_url(tenant_id, basename)
         except Exception:
             pass
 
@@ -2606,7 +2616,7 @@ def get_asset_variant_references_batch(
             hls_dir_path = path.parent / basename
             master = hls_dir_path / "master.m3u8"
             if master.exists():
-                hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
+                hls_url = build_hls_url(tenant_id, basename)
         except Exception:
             pass
 
@@ -3292,7 +3302,7 @@ def get_object_metadata(
 
             master = hls_dir_path / "master.m3u8"
             if master.exists():
-                response_obj.hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
+                response_obj.hls_url = build_hls_url(tenant_id, basename)
                 size_file = hls_dir_path / "hls_size.txt"
                 if size_file.exists():
                     try:
@@ -3395,7 +3405,7 @@ def list_objects(
 
                 master = hls_dir_path / "master.m3u8"
                 if master.exists():
-                    response_obj.hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{basename}/master.m3u8"
+                    response_obj.hls_url = build_hls_url(tenant_id, basename)
                     size_file = hls_dir_path / "hls_size.txt"
                     if size_file.exists():
                         try:
@@ -4552,7 +4562,7 @@ async def transcoding_callback(
 
                         # Set HLS URL
                         tenant_id = storage_obj.tenant_id or "arkturian"
-                        hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{original_basename}/master.m3u8"
+                        hls_url = build_hls_url(tenant_id, original_basename)
                         storage_obj.hls_url = hls_url
                         print(f"🎬 HLS URL set: {hls_url}")
 

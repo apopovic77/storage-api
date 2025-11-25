@@ -57,6 +57,16 @@ class Settings:
     STORAGE_UPLOAD_DIR: str = os.getenv("STORAGE_UPLOAD_DIR", "./uploads/storage")
     BASE_URL: str = os.getenv("STORAGE_BASE_URL", os.getenv("BASE_URL", "https://api-storage.arkturian.com"))
 
+    # VOD Base URL - automatically derived from BASE_URL
+    # Replaces "api-storage" with "vod" in the BASE_URL
+    @property
+    def VOD_BASE_URL(self) -> str:
+        vod_url = os.getenv("VOD_BASE_URL")
+        if vod_url:
+            return vod_url
+        # Auto-derive from BASE_URL: api-storage.X.com -> vod.X.com
+        return self.BASE_URL.replace("api-storage", "vod")
+
     # ChromaDB / Knowledge Graph
     CHROMA_DB_PATH: str = _CHROMA_DB_PATH_ENV
 
