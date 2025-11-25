@@ -112,8 +112,13 @@ jobs:
             git checkout dev
             git reset --hard origin/dev
 
+            # Use venv with Python 3.11 (prefer pyenv if available, fallback to system python3)
             rm -rf venv
-            python3 -m venv venv --upgrade-deps
+            if [ -f ~/.pyenv/versions/3.11.9/bin/python3.11 ]; then
+              ~/.pyenv/versions/3.11.9/bin/python3.11 -m venv venv --upgrade-deps
+            else
+              python3 -m venv venv --upgrade-deps
+            fi
             source venv/bin/activate
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
@@ -182,9 +187,13 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
-            # Use venv (will be created with system python or pyenv python if in PATH)
+            # Use venv with Python 3.11 (prefer pyenv if available, fallback to system python3)
             rm -rf venv
-            python3 -m venv venv --upgrade-deps
+            if [ -f ~/.pyenv/versions/3.11.9/bin/python3.11 ]; then
+              ~/.pyenv/versions/3.11.9/bin/python3.11 -m venv venv --upgrade-deps
+            else
+              python3 -m venv venv --upgrade-deps
+            fi
             source venv/bin/activate
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
