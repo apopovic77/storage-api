@@ -149,11 +149,6 @@ jobs:
           key: ${{ secrets.PROD_DEPLOY_SSH_KEY || secrets.DEPLOY_SSH_KEY }}
           script: |
             set -euo pipefail
-            apt-get update -y
-            apt-get install -y ca-certificates python3-venv
-            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
             TARGET_DIR="/var/www/storage-api"
             if [ -d /var/www/api-storage ]; then
@@ -187,18 +182,19 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
-            rm -rf venv
-            python3 -m venv venv --upgrade-deps
-            source venv/bin/activate
-            pip install --upgrade pip certifi
-            rm -rf ~/.cache/pip
-            pip install --no-cache-dir -r requirements.txt
+            # Production uses pyenv
+            export PYENV_ROOT="$HOME/.pyenv"
+            export PATH="$PYENV_ROOT/bin:$PATH"
+            eval "$(pyenv init -)"
+            pyenv global 3.11.9
+            pip install --upgrade pip
+            pip install -r requirements.txt
 
             systemctl restart storage-api.service
             systemctl restart transcoding-api.service || true
             sleep 5
             systemctl status storage-api.service --no-pager
-            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
+            curl -fsS --max-time 10 http://127.0.0.1:8002/health || { journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
 
   trigger-sdk-regeneration:
     name: Trigger SDK Regeneration
