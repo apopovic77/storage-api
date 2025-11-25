@@ -37,7 +37,7 @@ jobs:
           script: |
             set -e
 
-            REPO_PATH="/Volumes/DatenAP/Code/storage-api"
+            REPO_PATH="/var/code/storage-api"
             DEPLOY_PATH="/var/www/storage-api"
             BACKUP_DIR="/var/backups"
             BACKUP_PREFIX="storage-api"
@@ -49,25 +49,24 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
+            cd "$DEPLOY_PATH"
+            source venv/bin/activate
             pip install -r requirements.txt
 
-            echo 'No build required'
+            echo 'No build required for FastAPI'
 
-            if [ -d "$DEPLOY_PATH" ]; then
-              echo "Creating backup..."
-              mkdir -p "$BACKUP_DIR"
-              cp -r "$DEPLOY_PATH" "$BACKUP_PATH"
-            fi
-
-            echo "Deploying new build..."
-            mkdir -p "$DEPLOY_PATH"
-            rsync -av --delete "$REPO_PATH/dist/" "$DEPLOY_PATH/"
+            echo "Deploying Python code..."
+            rsync -av --exclude='.git' --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' \
+              "$REPO_PATH/" "$DEPLOY_PATH/"
 
             chown -R www-data:www-data "$DEPLOY_PATH"
             chmod -R 755 "$DEPLOY_PATH"
 
+            systemctl restart storage-api.service
+            systemctl restart transcoding-api.service
+
             echo "Deployment completed successfully!"
-            echo "Backup saved to: $BACKUP_PATH"
+            echo "Services restarted"
 
       - name: Notify on success
         if: success()
