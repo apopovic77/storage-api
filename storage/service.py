@@ -1071,6 +1071,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
     try:
         import shutil
         import httpx
+        from config import settings
 
         # Extract tenant_id from storage_obj or default to arkturian
         tenant_id = getattr(storage_obj, 'tenant_id', 'arkturian')
@@ -1265,7 +1266,6 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         
                         if mac_available:
                             # Submit to Mac for transcoding
-                            from config import settings
                             callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
                             job_id = mac_transcoding_client.submit_job(
                                 str(file_path), 
@@ -1323,7 +1323,6 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         
                         if mac_available:
                             # Submit to Mac for transcoding
-                            from config import settings
                             callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
                             job_id = mac_transcoding_client.submit_job(
                                 str(file_path), 
