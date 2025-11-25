@@ -4521,14 +4521,60 @@ async def transcoding_callback(
             storage_obj.transcoding_progress = 100
             storage_obj.transcoding_error = None
 
-            # Update metadata with output directory
+            # Copy HLS files from temp directory to storage and set hls_url
             if output_dir:
-                from sqlalchemy.orm.attributes import flag_modified
-                if not storage_obj.metadata_json:
-                    storage_obj.metadata_json = {}
-                storage_obj.metadata_json["transcoding_output_dir"] = output_dir
-                flag_modified(storage_obj, "metadata_json")
-                print(f"📁 Output directory saved: {output_dir}")
+                try:
+                    from pathlib import Path
+                    import shutil
+                    from sqlalchemy.orm.attributes import flag_modified
+                    from storage.generic_storage import generic_storage
+
+                    # Get the storage file path and create HLS directory
+                    storage_file_path = generic_storage.absolute_path_for_key(
+                        storage_obj.object_key,
+                        storage_obj.tenant_id
+                    )
+                    original_basename = Path(storage_obj.object_key).stem
+                    hls_dir = storage_file_path.parent / original_basename
+
+                    # Copy HLS files from temp dir to storage
+                    temp_output = Path(output_dir)
+                    if temp_output.exists():
+                        print(f"📁 Copying HLS files from {temp_output} to {hls_dir}")
+
+                        # Remove old HLS directory if exists
+                        if hls_dir.exists():
+                            shutil.rmtree(hls_dir)
+
+                        # Copy all files
+                        shutil.copytree(temp_output, hls_dir)
+                        print(f"✅ Copied {len(list(hls_dir.glob('*')))} files to {hls_dir}")
+
+                        # Set HLS URL
+                        tenant_id = storage_obj.tenant_id or "arkturian"
+                        hls_url = f"https://vod.arkturian.com/media/{tenant_id}/{original_basename}/master.m3u8"
+                        storage_obj.hls_url = hls_url
+                        print(f"🎬 HLS URL set: {hls_url}")
+
+                        # Clean up temp directory
+                        try:
+                            shutil.rmtree(temp_output.parent)
+                            print(f"🧹 Cleaned up temp dir: {temp_output.parent}")
+                        except Exception as cleanup_error:
+                            print(f"⚠️  Could not cleanup temp dir: {cleanup_error}")
+                    else:
+                        print(f"⚠️  Output directory not found: {output_dir}")
+
+                    # Save output_dir in metadata for reference
+                    if not storage_obj.metadata_json:
+                        storage_obj.metadata_json = {}
+                    storage_obj.metadata_json["transcoding_output_dir"] = output_dir
+                    flag_modified(storage_obj, "metadata_json")
+
+                except Exception as copy_error:
+                    print(f"❌ Error copying HLS files: {copy_error}")
+                    import traceback
+                    traceback.print_exc()
 
             print(f"✅ Transcoding completed for storage object {storage_object_id}")
             
