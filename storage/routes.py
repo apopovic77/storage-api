@@ -4505,7 +4505,7 @@ async def transcoding_callback(
     """
     Callback endpoint for transcoding API to report job completion
     """
-    print(f"📨 Transcoding callback: job_id={job_id}, status={status}, storage_object_id={storage_object_id}")
+    print(f"📨 Transcoding callback: job_id={job_id}, status={status}, storage_object_id={storage_object_id}, output_dir={output_dir}")
     
     try:
         # Get storage object
