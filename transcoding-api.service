@@ -1,0 +1,22 @@
+[Unit]
+Description=Local Transcoding API Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/storage-api
+Environment="PATH=/var/www/storage-api/venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/var/www/storage-api/venv/bin/python -m uvicorn transcoding_api_server:app --host 0.0.0.0 --port 8087
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=transcoding-api
+
+[Install]
+WantedBy=multi-user.target

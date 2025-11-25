@@ -85,4 +85,9 @@ class Settings:
     ANALYSIS_TIMEOUT: int = int(os.getenv("STORAGE_ANALYSIS_TIMEOUT", "60"))  # seconds
     AI_ANALYSIS_QUEUE_PATH: str = _AI_ANALYSIS_QUEUE_PATH_ENV
 
+    # Transcoding Settings
+    TRANSCODING_MODE: str = os.getenv("TRANSCODING_MODE", "local")  # local, remote, disabled
+    TRANSCODING_API_URL: Optional[str] = os.getenv("TRANSCODING_API_URL")
+    TRANSCODING_API_KEY: Optional[str] = os.getenv("TRANSCODING_API_KEY")
+
 settings = Settings()

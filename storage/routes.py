@@ -2796,7 +2796,7 @@ def get_media_variant(
         thumb_filename = f"thumb_ext_{object_id}.jpg"
 
     # Thumbnails are now stored in tenant subdirectories
-    thumb_path = generic_storage.thumbnails_dir / tenant_id / thumb_filename if thumb_filename else None
+    thumb_path = generic_storage.thumbnails_dir / obj.tenant_id / thumb_filename if thumb_filename else None
 
     def serve_trimmed_image(
         source_path: Path,
@@ -2957,7 +2957,7 @@ def get_media_variant(
     )
     dest_name = f"web_{base_name}_{max_edge}e{aspect_ratio_token}_q{q}.{suffix}"
     # Webview derivatives are now stored in tenant subdirectories
-    dest_path = generic_storage.webview_dir / tenant_id / dest_name
+    dest_path = generic_storage.webview_dir / obj.tenant_id / dest_name
 
     if refresh and dest_path.exists():
         dest_path.unlink(missing_ok=True)
