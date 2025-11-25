@@ -4527,7 +4527,7 @@ async def transcoding_callback(
                     from pathlib import Path
                     import shutil
                     from sqlalchemy.orm.attributes import flag_modified
-                    from storage.generic_storage import generic_storage
+                    from storage.service import generic_storage
 
                     # Get the storage file path and create HLS directory
                     storage_file_path = generic_storage.absolute_path_for_key(
