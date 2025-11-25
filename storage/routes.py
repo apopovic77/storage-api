@@ -4520,13 +4520,16 @@ async def transcoding_callback(
             storage_obj.transcoding_status = "completed"
             storage_obj.transcoding_progress = 100
             storage_obj.transcoding_error = None
-            
+
             # Update metadata with output directory
             if output_dir:
-                metadata = storage_obj.metadata_json or {}
-                metadata["transcoding_output_dir"] = output_dir
-                storage_obj.metadata_json = metadata
-            
+                from sqlalchemy.orm.attributes import flag_modified
+                if not storage_obj.metadata_json:
+                    storage_obj.metadata_json = {}
+                storage_obj.metadata_json["transcoding_output_dir"] = output_dir
+                flag_modified(storage_obj, "metadata_json")
+                print(f"📁 Output directory saved: {output_dir}")
+
             print(f"✅ Transcoding completed for storage object {storage_object_id}")
             
         elif status == "failed":
