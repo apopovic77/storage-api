@@ -217,3 +217,10 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
           repository: apopovic77/storage-api-csharp-sdk
           event-type: openapi-updated
+
+      - name: Trigger TypeScript SDK regeneration
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: apopovic77/storage-api-typescript-sdk
+          event-type: openapi-updated
