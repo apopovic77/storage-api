@@ -1251,126 +1251,65 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         print(f"--- SUCCESS: Thumbnail extraction complete for {file_path}")
                         _append_ai_queue_line(f"{storage_obj.id}|video|{ai_thumb_dir}|{storage_obj.original_filename}\n")
 
-                # Decide between local and Mac transcoding based on file size
+                # Submit all videos to Mac transcoding (regardless of file size)
                 file_size = file_path.stat().st_size
                 size_mb = file_size / (1024 * 1024)
 
-                # Use Mac transcoding for files > 10MB  
-                if size_mb > 10:
-                    print(f"--- Large file ({size_mb:.1f}MB), attempting Mac transcoding delegation")
-                    try:
-                        from mac_transcoding_client import mac_transcoding_client
-                        
-                        # Check if Mac API is available
-                        mac_available = mac_transcoding_client.is_available()
-                        
-                        if mac_available:
-                            # Submit to Mac for transcoding
-                            callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
-                            job_id = mac_transcoding_client.submit_job(
-                                str(file_path), 
-                                file_size, 
-                                storage_obj.original_filename,
-                                callback_url,
-                                str(storage_obj.id)
-                            )
-                            
-                            if job_id:
-                                print(f"--- SUCCESS: Submitted to Mac transcoding: {job_id}")
-                                # Mark in database that this is being processed by Mac
-                                # Store the Mac job_id in the metadata_json field for tracking
-                                from datetime import datetime, timezone
-                                from database import SessionLocal
+                print(f"--- Video file ({size_mb:.1f}MB), attempting Mac transcoding delegation")
+                try:
+                    from mac_transcoding_client import mac_transcoding_client
 
-                                # Create new DB session for this operation
-                                db_session = SessionLocal()
-                                try:
-                                    # Get the object in this session by ID
-                                    storage_obj_id = storage_obj.id
-                                    from models import StorageObject
-                                    storage_obj_refresh = db_session.get(StorageObject, storage_obj_id)
-                                    
-                                    if not storage_obj_refresh.metadata_json:
-                                        storage_obj_refresh.metadata_json = {}
-                                    storage_obj_refresh.metadata_json['mac_job_id'] = job_id
-                                    storage_obj_refresh.metadata_json['mac_submitted_at'] = datetime.now(timezone.utc).isoformat()
-                                    storage_obj_refresh.transcoding_status = "processing"
-                                    
-                                    db_session.commit()
-                                    print(f"✅ Database updated with mac_job_id: {job_id}")
-                                finally:
-                                    db_session.close()
-                                
-                                print(f"--- Mac job {job_id} submitted successfully")
-                                # Successfully submitted to Mac - skip local transcoding for now
-                                return  # Exit this function early
-                            else:
-                                raise Exception("Mac API rejected job")
-                        else:
-                            raise Exception("Mac API unavailable")
-                            
-                    except Exception as mac_error:
-                        print(f"!!! Mac transcoding failed ({mac_error}) - skipping transcoding completely")
-                        return  # Exit without fallback
-                else:
-                    # DISABLED: Always try Mac first, even for small files
-                    print(f"--- Small file ({size_mb:.1f}MB), but still trying Mac transcoding")
-                    try:
-                        from mac_transcoding_client import mac_transcoding_client
-                        
-                        # Check if Mac API is available
-                        mac_available = mac_transcoding_client.is_available()
-                        
-                        if mac_available:
-                            # Submit to Mac for transcoding
-                            callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
-                            job_id = mac_transcoding_client.submit_job(
-                                str(file_path), 
-                                file_size, 
-                                storage_obj.original_filename,
-                                callback_url,
-                                str(storage_obj.id)
-                            )
-                            
-                            if job_id:
-                                print(f"--- SUCCESS: Small file submitted to Mac transcoding: {job_id}")
-                                # Mark in database that this is being processed by Mac
-                                # Store the Mac job_id in the metadata_json field for tracking
-                                from datetime import datetime, timezone
-                                from database import SessionLocal
+                    # Check if Mac API is available
+                    mac_available = mac_transcoding_client.is_available()
 
-                                # Create new DB session for this operation
-                                db_session = SessionLocal()
-                                try:
-                                    # Get the object in this session by ID
-                                    storage_obj_id = storage_obj.id
-                                    from models import StorageObject
-                                    storage_obj_refresh = db_session.get(StorageObject, storage_obj_id)
-                                    
-                                    if not storage_obj_refresh.metadata_json:
-                                        storage_obj_refresh.metadata_json = {}
-                                    storage_obj_refresh.metadata_json['mac_job_id'] = job_id
-                                    storage_obj_refresh.metadata_json['mac_submitted_at'] = datetime.now(timezone.utc).isoformat()
-                                    storage_obj_refresh.transcoding_status = "processing"
-                                    
-                                    db_session.commit()
-                                    print(f"✅ Database updated with mac_job_id: {job_id}")
-                                finally:
-                                    db_session.close()
-                                
-                                print(f"--- Mac job {job_id} submitted successfully (small file)")
-                                # Successfully submitted to Mac - skip local transcoding for now
-                                return  # Exit this function early
-                            else:
-                                print(f"--- Mac rejected small file, no local fallback")
-                                return
+                    if mac_available:
+                        # Submit to Mac for transcoding
+                        callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
+                        job_id = mac_transcoding_client.submit_job(
+                            str(file_path),
+                            file_size,
+                            storage_obj.original_filename,
+                            callback_url,
+                            str(storage_obj.id)
+                        )
+
+                        if job_id:
+                            print(f"--- SUCCESS: Submitted to Mac transcoding: {job_id}")
+                            # Mark in database that this is being processed by Mac
+                            # Store the Mac job_id in the metadata_json field for tracking
+                            from datetime import datetime, timezone
+                            from database import SessionLocal
+
+                            # Create new DB session for this operation
+                            db_session = SessionLocal()
+                            try:
+                                # Get the object in this session by ID
+                                storage_obj_id = storage_obj.id
+                                from models import StorageObject
+                                storage_obj_refresh = db_session.get(StorageObject, storage_obj_id)
+
+                                if not storage_obj_refresh.metadata_json:
+                                    storage_obj_refresh.metadata_json = {}
+                                storage_obj_refresh.metadata_json['mac_job_id'] = job_id
+                                storage_obj_refresh.metadata_json['mac_submitted_at'] = datetime.now(timezone.utc).isoformat()
+                                storage_obj_refresh.transcoding_status = "processing"
+
+                                db_session.commit()
+                                print(f"✅ Database updated with mac_job_id: {job_id}")
+                            finally:
+                                db_session.close()
+
+                            print(f"--- Mac job {job_id} submitted successfully")
+                            # Successfully submitted to Mac - skip local transcoding for now
+                            return  # Exit this function early
                         else:
-                            print(f"--- Mac unavailable for small file, no local fallback")
-                            return
-                            
-                    except Exception as mac_error:
-                        print(f"!!! Mac transcoding failed for small file ({mac_error}) - NO FALLBACK")
-                        return
+                            raise Exception("Mac API rejected job")
+                    else:
+                        raise Exception("Mac API unavailable")
+
+                except Exception as mac_error:
+                    print(f"!!! Mac transcoding failed ({mac_error}) - skipping transcoding completely")
+                    return  # Exit without fallback
                         
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("image/"):
             # Image processing - resize and optimize for AI safety analysis
