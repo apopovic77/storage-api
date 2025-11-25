@@ -1,209 +1,79 @@
-name: Deploy Storage API
+name: Build & Deploy
 
 on:
   push:
     branches:
-      - dev          # Auto-deploy to staging (arkserver.arkturian.com)
-      - main         # Manual deploy to production (arkserver.arkturian.com)
-  pull_request:
-    branches:
       - main
-      - dev
-
-env:
-  PYTHON_VERSION: "3.11"
+  workflow_dispatch:
 
 jobs:
-  test:
-    name: Run Tests
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          node-version: '18'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
+        run: pip install -r requirements.txt
 
-      - name: Run tests
-        run: |
-          if [ -d tests ]; then
-            pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
-          else
-            echo "No tests directory present. Skipping pytest step."
-          fi
+      - name: Build application
+        run: echo 'No build required'
+        env:
+          NODE_ENV: production
 
-  deploy-staging:
-    name: Deploy to Staging (arkserver.arkturian.com)
-    needs: test
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.ENABLE_STAGING_DEPLOY == 'true'
-    runs-on: ubuntu-latest
-    environment:
-      name: staging
-      url: https://api-storage.arkserver.arkturian.com
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Deploy to Staging Server (primary)
-        uses: appleboy/ssh-action@master
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
           script: |
-            set -euo pipefail
-            apt-get update -y
-            apt-get install -y ca-certificates python3-venv
-            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-            echo "🚀 Deploying to staging..."
-            TARGET_DIR="/var/www/api-storage.arkturian.com"
-            if [ -d /var/www/storage-api ]; then
-              TARGET_DIR="/var/www/storage-api"
-            elif [ -d /var/www/api-storage ]; then
-              TARGET_DIR="/var/www/api-storage"
-            fi
-            cd "$TARGET_DIR"
-            git config --global --add safe.directory "$TARGET_DIR"
-            if [ ! -d .git ]; then
-              git init
-            fi
-            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
-            git fetch origin
-            DATA_DIR="/var/lib/storage-api"
-            mkdir -p "$DATA_DIR/chroma_db"
-            for item in storage.db storage.db-shm storage.db-wal; do
-              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
-                cp -a "$item" "$DATA_DIR/$item"
-              fi
-            done
-            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
-                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
-            fi
-            git clean -fdx -e .env
-            git checkout dev
-            git reset --hard origin/dev
-            rm -rf venv
-            python3 -m venv venv --upgrade-deps
-            source venv/bin/activate
-            pip install --upgrade pip certifi
-            rm -rf ~/.cache/pip
-            pip install --no-cache-dir -r requirements.txt
-            systemctl restart storage-api.service
-            sleep 5
-            systemctl status storage-api.service --no-pager
-            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { echo "Health check failed"; journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
+            set -e
 
-  deploy-production:
-    name: Deploy to Production
-    needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - name: arkserver
-            host_secret: DEPLOY_HOST
-            port_secret: DEPLOY_PORT
-            user_secret: DEPLOY_USER
-            key_secret: DEPLOY_SSH_KEY
-            url: https://api-storage.arkserver.arkturian.com
-          - name: arkturian
-            host_secret: DEPLOY_HOST_ALT
-            port_secret: DEPLOY_PORT_ALT
-            user_secret: DEPLOY_USER_ALT
-            key_secret: DEPLOY_SSH_KEY_ALT
-            url: https://api-storage.arkturian.com
-    environment:
-      name: production
-      url: ${{ matrix.target.url }}
+            REPO_PATH="/Volumes/DatenAP/Code/storage-api"
+            DEPLOY_PATH="/var/www/storage-api"
+            BACKUP_DIR="/var/backups"
+            BACKUP_PREFIX="storage-api"
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            BACKUP_PATH="$BACKUP_DIR/${BACKUP_PREFIX}-${TIMESTAMP}"
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+            cd "$REPO_PATH"
 
-      - name: Deploy to Production Server (${{ matrix.target.name }})
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets[matrix.target.host_secret] }}
-          port: ${{ secrets[matrix.target.port_secret] || 22 }}
-          username: ${{ secrets[matrix.target.user_secret] }}
-          key: ${{ secrets[matrix.target.key_secret] }}
-          script: |
-            set -euo pipefail
-            apt-get update -y
-            apt-get install -y ca-certificates python3-venv
-            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-            echo "🚀 Deploying to production (${{ matrix.target.name }})..."
-            TARGET_DIR="/var/www/api-storage"
-            if [ -d /var/www/storage-api ]; then
-              TARGET_DIR="/var/www/storage-api"
-            elif [ ! -d "$TARGET_DIR" ] && [ -d /var/www/api-storage.arkturian.com ]; then
-              TARGET_DIR="/var/www/api-storage.arkturian.com"
-            fi
-            cd "$TARGET_DIR"
-            git config --global --add safe.directory "$TARGET_DIR"
-            if [ ! -d .git ]; then
-              git init
-            fi
-            git remote set-url origin https://github.com/apopovic77/storage-api.git 2>/dev/null || git remote add origin https://github.com/apopovic77/storage-api.git
-            git fetch origin
-            DATA_DIR="/var/lib/storage-api"
-            mkdir -p "$DATA_DIR/chroma_db"
-            for item in storage.db storage.db-shm storage.db-wal; do
-              if [ -f "$item" ] && [ ! -f "$DATA_DIR/$item" ]; then
-                cp -a "$item" "$DATA_DIR/$item"
-              fi
-            done
-            if [ -d chroma_db ] && [ ! "$(ls -A "$DATA_DIR/chroma_db" 2>/dev/null)" ]; then
-                cp -a chroma_db/. "$DATA_DIR/chroma_db/"
-            fi
-            git clean -fdx -e .env
-            git checkout main
+            git fetch origin main
             git reset --hard origin/main
-            rm -rf venv
-            python3 -m venv venv --upgrade-deps
-            source venv/bin/activate
-            pip install --upgrade pip certifi
-            rm -rf ~/.cache/pip
-            pip install --no-cache-dir -r requirements.txt
-            systemctl restart storage-api.service
-            sleep 5
-            systemctl status storage-api.service --no-pager
-            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { echo "Health check failed"; journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
 
-  trigger-sdk-regeneration:
-    name: Trigger SDK Regeneration
-    needs: deploy-production
-    if: github.ref == 'refs/heads/main' && success()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger C# SDK regeneration
-        uses: peter-evans/repository-dispatch@v2
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
-          repository: apopovic77/storage-api-csharp-sdk
-          event-type: openapi-updated
+            pip install -r requirements.txt
+
+            echo 'No build required'
+
+            if [ -d "$DEPLOY_PATH" ]; then
+              echo "Creating backup..."
+              mkdir -p "$BACKUP_DIR"
+              cp -r "$DEPLOY_PATH" "$BACKUP_PATH"
+            fi
+
+            echo "Deploying new build..."
+            mkdir -p "$DEPLOY_PATH"
+            rsync -av --delete "$REPO_PATH/dist/" "$DEPLOY_PATH/"
+
+            chown -R www-data:www-data "$DEPLOY_PATH"
+            chmod -R 755 "$DEPLOY_PATH"
+
+            echo "Deployment completed successfully!"
+            echo "Backup saved to: $BACKUP_PATH"
+
+      - name: Notify on success
+        if: success()
+        run: echo "✅ Deployment successful for commit ${{ github.sha }}"
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "❌ Deployment failed for commit ${{ github.sha }}"

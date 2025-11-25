@@ -13,7 +13,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-DEPLOY_PATH="${DEPLOY_PATH:-/var/www/api-storage.arkturian.com}"
+DEPLOY_PATH="${DEPLOY_PATH:-/var/www/storage-api}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups}"
 BACKUP_PREFIX="${BACKUP_PREFIX:-storage-api}"
 

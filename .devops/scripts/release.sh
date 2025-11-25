@@ -2,15 +2,19 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/common.sh"
-CHECKOUT_SCRIPT="$(dirname "$0")/checkout-branch.sh"
-BUILD_SCRIPT="$(dirname "$0")/build-local.sh"
+# Resolve repository root relative to this script so it works anywhere.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_BRANCH="dev"
+MAIN_BRANCH="main"
+CHECKOUT_SCRIPT="$SCRIPT_DIR/checkout-branch.sh"
+BUILD_SCRIPT="$SCRIPT_DIR/build-local.sh"
 
 usage() {
   cat <<'USAGE'
 Usage: release.sh [--no-build]
 
-Fast-forwards {{MAIN_BRANCH}} from {{DEV_BRANCH}}, pushes to origin, and
+Fast-forwards main from dev, pushes to origin, and
 triggers the GitHub Actions deployment workflow. By default the local build
 script runs beforehand.
 

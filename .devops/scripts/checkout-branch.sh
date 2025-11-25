@@ -2,7 +2,11 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/common.sh"
+# Resolve repository root relative to this script so it works everywhere.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_BRANCH="dev"
+MAIN_BRANCH="main"
 
 usage() {
   cat <<'USAGE'
@@ -11,8 +15,8 @@ Usage: checkout-branch.sh <branch>
 Switches the working tree to the requested branch and fast-forwards it from origin.
 
 Examples:
-  checkout-branch.sh {{DEV_BRANCH}}
-  checkout-branch.sh {{MAIN_BRANCH}}
+  checkout-branch.sh dev
+  checkout-branch.sh main
 USAGE
 }
 

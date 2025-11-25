@@ -198,10 +198,7 @@ fi
 echo -e "${YELLOW}🚢 Deploying files...${NC}"
 
 if [ "$SERVER_TYPE" = "python-api" ]; then
-    # Ensure persistent data directory exists
-    ssh "$SERVER_USER@$SERVER_HOST" "mkdir -p /var/lib/storage-api"
-
-    # Python API: rsync all files except venv and persistent data
+    # Python API: rsync all files except venv
     rsync -az --delete \
         --exclude='venv' \
         --exclude='.git' \
@@ -209,9 +206,6 @@ if [ "$SERVER_TYPE" = "python-api" ]; then
         --exclude='*.pyc' \
         --exclude='node_modules' \
         --exclude='.env.local' \
-        --exclude='storage.db' \
-        --exclude='chroma_db' \
-        --exclude='uploads' \
         "$REPO_ROOT/" "$SERVER_USER@$SERVER_HOST:$DEPLOY_PATH/"
 
     # Update dependencies if requirements.txt changed

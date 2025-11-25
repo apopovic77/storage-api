@@ -1,0 +1,51 @@
+# Example Server Configuration for Python API
+# Copy this to .devops/servers/<your-server>.yaml and customize
+
+server:
+  # Server connection details
+  name: "example-python-api"
+  type: "python-api"  # python-api | node | php | static
+  host: "example.com"
+  user: "root"
+  deploy_path: "/var/www/my-api"
+
+service:
+  # Systemd service configuration
+  type: "systemd"
+  name: "my-api"
+  port: 8000
+
+nginx:
+  # Nginx reverse proxy configuration
+  enabled: true
+  server_name: "api.example.com"
+  port: 80
+  # Optional: SSL configuration
+  # ssl: true
+  # ssl_cert: "/etc/letsencrypt/live/api.example.com/fullchain.pem"
+  # ssl_key: "/etc/letsencrypt/live/api.example.com/privkey.pem"
+
+environment:
+  # Environment variables for the application
+  # NOTE: Don't commit secrets! Use {{SECRET}} placeholders
+  DATABASE_URL: "sqlite:////var/www/my-api/app.db"
+  API_KEY: "{{SECRET}}"
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  LOG_LEVEL: "info"
+
+python:
+  # Python-specific configuration
+  version: "3.11"
+  requirements: "requirements.txt"
+  venv_path: "venv"
+  # Optional: Custom python binary
+  # python_binary: "/usr/bin/python3.11"
+
+backup:
+  # Backup configuration
+  enabled: true
+  dir: "/var/backups"
+  prefix: "my-api"
+  # Optional: Retention policy
+  # keep_last: 10

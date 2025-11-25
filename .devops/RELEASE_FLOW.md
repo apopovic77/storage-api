@@ -10,7 +10,7 @@
 3. When ready to ship, ensure `dev` is green and run `.devops/scripts/release.sh`.
 4. The script fast-forwards `main`, pushes to GitHub, and GitHub Actions (`deploy.yml`) handles build + deploy.
 5. Monitor the workflow run with `gh run watch` or via the Actions tab.
-6. Validate the site at `https://api-storage.arkturian.com` (if applicable) and confirm fresh assets reached `/var/www/api-storage.arkturian.com`.
+6. Validate the site at `https://storage-api.local` (if applicable) and confirm fresh assets reached `/var/www/storage-api`.
 
 ## Rollback Strategy
 - Use `.devops/rollback.sh` on the server to restore from `/var/backups/storage-api-*`.

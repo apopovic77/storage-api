@@ -2,7 +2,10 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/common.sh"
+# Resolve repository root relative to this script so it works everywhere.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+BUILD_COMMAND="echo 'No build required'"
 
 usage() {
   cat <<'USAGE'
@@ -31,10 +34,6 @@ if [[ "$clean_flag" == true && -d dist ]]; then
 fi
 
 # shellcheck disable=SC2086
-if [[ "$BUILD_COMMAND" == ":" ]]; then
-  echo "No build command configured (BUILD_COMMAND). Skipping local build."
-else
-  $BUILD_COMMAND
-fi
+$BUILD_COMMAND
 
 echo "✅ Local build finished. Output: ${REPO_ROOT}/dist"

@@ -2,14 +2,17 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/common.sh"
+# Resolve repository root relative to this script so it works on any machine.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_BRANCH="dev"
 
 usage() {
   cat <<'USAGE'
 Usage: push-dev.sh <commit-message>
 
 Stages all changes, commits them to the development branch with the provided
-message, fast-forwards from origin, and pushes to origin {{DEV_BRANCH}}.
+message, fast-forwards from origin, and pushes to origin dev.
 USAGE
 }
 
@@ -27,19 +30,18 @@ commit_msg="$*"
 
 cd "$REPO_ROOT"
 
+git checkout "$DEV_BRANCH"
 git fetch origin "$DEV_BRANCH"
-if ! git checkout "$DEV_BRANCH"; then
-  die "Branch $DEV_BRANCH does not exist"
-fi
-git pull --ff-only origin "$DEV_BRANCH" || true
+git pull --ff-only origin "$DEV_BRANCH"
 
 git add -A
 
 if git diff --cached --quiet; then
-  echo "No staged changes to commit. Staging working tree..."
+  echo "No staged changes to commit." >&2
+  exit 1
 fi
 
-git commit -m "$commit_msg" || echo "No changes to commit"
+git commit -m "$commit_msg"
 
 git push origin "$DEV_BRANCH"
 

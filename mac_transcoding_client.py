@@ -69,7 +69,9 @@ class MacTranscodingClient:
             # Convert file path to download URL
             # The Mac API expects a URL it can download from
             # We'll use the storage-api's file download endpoint
-            source_url = f"https://api-storage.arkturian.com/storage/files/{reference_id}"
+            # Get base URL from environment or use current server
+            api_base_url = os.getenv("STORAGE_API_BASE_URL", "https://api-storage.arkturian.com")
+            source_url = f"{api_base_url}/storage/files/{reference_id}"
             
             payload = {
                 "job_id": job_id,
