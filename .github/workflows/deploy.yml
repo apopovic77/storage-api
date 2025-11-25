@@ -52,7 +52,11 @@ jobs:
   deploy-staging:
     name: Deploy to Staging (arkserver.arkturian.com)
     needs: test
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.ENABLE_STAGING_DEPLOY == 'true'
+    if: |
+      vars.ENABLE_STAGING_DEPLOY == 'true' && (
+        (github.ref == 'refs/heads/dev' && github.event_name == 'push') ||
+        (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch')
+      )
     runs-on: ubuntu-latest
     environment:
       name: staging
@@ -124,7 +128,10 @@ jobs:
   deploy-production:
     name: Deploy to Production
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    if: |
+      github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_DEPLOY == 'true' && (
+        github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      )
     runs-on: ubuntu-latest
     environment:
       name: production
