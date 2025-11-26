@@ -2,8 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional, List
-import shutil
-from pathlib import Path
 from database import get_db
 from auth import get_current_user
 from models import StorageObject, User
@@ -245,21 +243,14 @@ def cleanup_objects_older_than(db: Session, days: int) -> CleanupResponse:
     
     # Delete files and database records
     for obj in objects_to_delete:
+        # Delete file and all associated assets (thumbnails, webview, HLS)
+        # The generic_storage.delete() method calls _delete_physical_assets()
+        # which handles deletion of all derived files
         try:
-            # Delete HLS directory if exists
-            basename = Path(obj.object_key).stem
-            hls_dir_path = generic_storage.absolute_path_for_key(obj.object_key).parent / basename
-            if hls_dir_path.is_dir():
-                shutil.rmtree(hls_dir_path)
-        except Exception as e:
-            print(f"Error deleting HLS directory for {obj.object_key}: {e}")
-        
-        # Delete file
-        try:
-            generic_storage.delete(obj.object_key)
+            generic_storage.delete(obj.object_key, obj.tenant_id)
         except Exception as e:
             print(f"Error deleting file {obj.object_key}: {e}")
-        
+
         # Delete database record
         db.delete(obj)
     
@@ -287,21 +278,14 @@ def purge_objects_by_user_email(db: Session, email: str) -> CleanupResponse:
     
     # Delete files and database records
     for obj in objects_to_delete:
+        # Delete file and all associated assets (thumbnails, webview, HLS)
+        # The generic_storage.delete() method calls _delete_physical_assets()
+        # which handles deletion of all derived files
         try:
-            # Delete HLS directory if exists
-            basename = Path(obj.object_key).stem
-            hls_dir_path = generic_storage.absolute_path_for_key(obj.object_key).parent / basename
-            if hls_dir_path.is_dir():
-                shutil.rmtree(hls_dir_path)
-        except Exception as e:
-            print(f"Error deleting HLS directory for {obj.object_key}: {e}")
-        
-        # Delete file
-        try:
-            generic_storage.delete(obj.object_key)
+            generic_storage.delete(obj.object_key, obj.tenant_id)
         except Exception as e:
             print(f"Error deleting file {obj.object_key}: {e}")
-        
+
         # Delete database record
         db.delete(obj)
     
@@ -324,21 +308,14 @@ def purge_objects_by_collection(db: Session, collection_id: str) -> CleanupRespo
     
     # Delete files and database records
     for obj in objects_to_delete:
+        # Delete file and all associated assets (thumbnails, webview, HLS)
+        # The generic_storage.delete() method calls _delete_physical_assets()
+        # which handles deletion of all derived files
         try:
-            # Delete HLS directory if exists
-            basename = Path(obj.object_key).stem
-            hls_dir_path = generic_storage.absolute_path_for_key(obj.object_key).parent / basename
-            if hls_dir_path.is_dir():
-                shutil.rmtree(hls_dir_path)
-        except Exception as e:
-            print(f"Error deleting HLS directory for {obj.object_key}: {e}")
-        
-        # Delete file
-        try:
-            generic_storage.delete(obj.object_key)
+            generic_storage.delete(obj.object_key, obj.tenant_id)
         except Exception as e:
             print(f"Error deleting file {obj.object_key}: {e}")
-        
+
         # Delete database record
         db.delete(obj)
     
