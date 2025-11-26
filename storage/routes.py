@@ -2765,6 +2765,69 @@ def get_media_variant(
         stored_trim = context_meta.get("trim_bounds")
 
     if not mime.startswith("image/"):
+        # Handle video frame extraction if image format is requested
+        if mime.startswith("video/") and format and format.lower() in ["jpg", "jpeg", "png", "webp"]:
+            try:
+                # Extract frame from middle of video
+                import subprocess
+                from io import BytesIO
+                from PIL import Image
+
+                # Get video duration to find middle timestamp
+                probe_cmd = [
+                    "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", str(src_path)
+                ]
+                result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                duration = float(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip() else 0
+                timestamp = max(duration / 2, 0)  # Middle of video
+
+                # Extract frame using ffmpeg
+                ffmpeg_cmd = [
+                    "ffmpeg", "-ss", str(timestamp), "-i", str(src_path),
+                    "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"
+                ]
+                frame_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=30)
+
+                if frame_result.returncode == 0 and frame_result.stdout:
+                    # Load image from ffmpeg output
+                    img = Image.open(BytesIO(frame_result.stdout))
+
+                    # Apply width/height if specified
+                    if width or height:
+                        w, h = img.size
+                        if width and height:
+                            img = img.resize((width, height), Image.Resampling.LANCZOS)
+                        elif width:
+                            new_h = int(h * (width / w))
+                            img = img.resize((width, new_h), Image.Resampling.LANCZOS)
+                        elif height:
+                            new_w = int(w * (height / h))
+                            img = img.resize((new_w, height), Image.Resampling.LANCZOS)
+
+                    # Convert to requested format
+                    buffer = BytesIO()
+                    target_format = format.lower()
+                    save_format = "JPEG" if target_format in ["jpg", "jpeg"] else target_format.upper()
+
+                    if save_format == "JPEG" and img.mode in {"RGBA", "LA", "P"}:
+                        img = img.convert("RGB")
+
+                    save_kwargs = {}
+                    if save_format == "JPEG":
+                        save_kwargs = {"quality": quality or 90, "optimize": True}
+                    elif save_format == "WEBP":
+                        save_kwargs = {"quality": quality or 90, "method": 6}
+
+                    img.save(buffer, format=save_format, **save_kwargs)
+                    buffer.seek(0)
+
+                    media_type_map = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+                    return Response(content=buffer.getvalue(), media_type=media_type_map.get(save_format, "image/png"))
+            except Exception as e:
+                print(f"⚠️ Failed to extract video frame for object {object_id}: {e}")
+                # Fall through to return original video
+
         return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
 
     # Compute source paths
