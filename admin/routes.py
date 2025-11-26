@@ -16,6 +16,7 @@ class UserWithCollections(BaseModel):
     email: str
     display_name: str
     collection_count: int
+    tenant_id: str
 
 class CollectionInfo(BaseModel):
     id: str
@@ -32,10 +33,11 @@ def get_users_with_collections(
     if current_user.trust_level != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    # Query users who have storage objects with collection_id
+    # Query users who have storage objects with collection_id, grouped by tenant
     users_with_collections = db.query(
         User.email,
         User.display_name,
+        StorageObject.tenant_id,
         func.count(func.distinct(StorageObject.collection_id)).label('collection_count')
     ).join(
         StorageObject, User.id == StorageObject.owner_user_id
@@ -43,18 +45,19 @@ def get_users_with_collections(
         StorageObject.collection_id.isnot(None),
         StorageObject.collection_id != ""
     ).group_by(
-        User.id, User.email, User.display_name
+        User.id, User.email, User.display_name, StorageObject.tenant_id
     ).having(
         func.count(func.distinct(StorageObject.collection_id)) > 0
     ).order_by(
-        User.email
+        StorageObject.tenant_id, User.email
     ).all()
-    
+
     return [
         UserWithCollections(
             email=user.email,
             display_name=user.display_name,
-            collection_count=user.collection_count
+            collection_count=user.collection_count,
+            tenant_id=user.tenant_id
         )
         for user in users_with_collections
     ]
