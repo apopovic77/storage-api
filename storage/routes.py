@@ -3389,6 +3389,7 @@ def get_object_metadata(
             master = hls_dir_path / "master.m3u8"
             if master.exists():
                 response_obj.hls_url = build_hls_url(tenant_id, basename)
+                response_obj.transcoding_status = "completed"  # Set status to completed when HLS exists
                 size_file = hls_dir_path / "hls_size.txt"
                 if size_file.exists():
                     try:
@@ -3492,6 +3493,7 @@ def list_objects(
                 master = hls_dir_path / "master.m3u8"
                 if master.exists():
                     response_obj.hls_url = build_hls_url(tenant_id, basename)
+                    response_obj.transcoding_status = "completed"  # Set status to completed when HLS exists
                     size_file = hls_dir_path / "hls_size.txt"
                     if size_file.exists():
                         try:
