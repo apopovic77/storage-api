@@ -2725,6 +2725,10 @@ def get_media_variant(
     - If variant == full: stream original file.
     - width/height/format/quality can override defaults and will materialize a persistent derivative in webview dir.
     """
+    # Import PIL.Image at function level (needed for image processing)
+    from io import BytesIO
+    from PIL import Image
+
     try:
         target_aspect_ratio_value = _parse_aspect_ratio_value(aspect_ratio)
     except ValueError as exc:
@@ -2775,8 +2779,6 @@ def get_media_variant(
             try:
                 # Extract frame from middle of video
                 import subprocess
-                from io import BytesIO
-                from PIL import Image
 
                 # Get video duration to find middle timestamp
                 probe_cmd = [
@@ -2896,8 +2898,6 @@ def get_media_variant(
                 media_type=base_media_type,
                 headers={"Content-Disposition": "inline"},
             )
-
-        from PIL import Image
 
         buffer = BytesIO()
         with Image.open(source_path) as base_img:
@@ -3464,6 +3464,9 @@ def list_objects(
     response_items: List[StorageObjectResponse] = []
     for storage_obj, owner_email in results:
         response_obj = StorageObjectResponse.from_orm(storage_obj)
+        # DEBUG: Log transcoding status for ID 33648
+        if storage_obj.id == 33648:
+            print(f"DEBUG 33648: After from_orm, transcoding_status = {response_obj.transcoding_status}")
         # Add owner_email to the response
         response_obj.owner_email = owner_email
 
