@@ -24,6 +24,13 @@ class CollectionInfo(BaseModel):
     item_count: int
     owner_email: Optional[str] = None
 
+class CollectionSearchResult(BaseModel):
+    collection_id: str
+    item_count: int
+    owner_email: Optional[str] = None
+    owner_display_name: Optional[str] = None
+    tenant_id: str
+
 @router.get("/users-with-collections", response_model=List[UserWithCollections])
 def get_users_with_collections(
     db: Session = Depends(get_db),
@@ -115,6 +122,52 @@ def get_collections_for_user(
             owner_email=user_email if not public_only else None
         )
         for collection in collections
+    ]
+
+
+@router.get("/collections/search", response_model=List[CollectionSearchResult])
+def search_collections(
+    query: str = Query(..., min_length=1, description="Search query for collection name"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Search for collections across all tenants and users by collection name"""
+    if current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Search for collections with name matching the query (case-insensitive)
+    # Join with User to get owner information
+    results = db.query(
+        StorageObject.collection_id,
+        StorageObject.tenant_id,
+        func.count(StorageObject.id).label('item_count'),
+        User.email.label('owner_email'),
+        User.display_name.label('owner_display_name')
+    ).outerjoin(
+        User, StorageObject.owner_user_id == User.id
+    ).filter(
+        StorageObject.collection_id.isnot(None),
+        StorageObject.collection_id != "",
+        StorageObject.collection_id.ilike(f"%{query}%")  # Case-insensitive partial match
+    ).group_by(
+        StorageObject.collection_id,
+        StorageObject.tenant_id,
+        User.email,
+        User.display_name
+    ).order_by(
+        StorageObject.tenant_id,
+        StorageObject.collection_id
+    ).all()
+
+    return [
+        CollectionSearchResult(
+            collection_id=result.collection_id,
+            item_count=result.item_count,
+            owner_email=result.owner_email,
+            owner_display_name=result.owner_display_name,
+            tenant_id=result.tenant_id
+        )
+        for result in results
     ]
 
 
