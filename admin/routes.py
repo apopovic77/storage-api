@@ -176,6 +176,60 @@ class CleanupResponse(BaseModel):
     message: str
 
 
+class CleanupByCollectionRequest(BaseModel):
+    collection_id: str
+
+
+class CleanupByUserRequest(BaseModel):
+    user_email: str
+
+
+class CleanupByAgeRequest(BaseModel):
+    days: int
+
+
+@router.post("/cleanup/by-collection", response_model=CleanupResponse)
+def cleanup_by_collection(
+    request: CleanupByCollectionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete all storage objects within a specific collection"""
+    if current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return purge_objects_by_collection(db, request.collection_id)
+
+
+@router.post("/cleanup/by-user", response_model=CleanupResponse)
+def cleanup_by_user(
+    request: CleanupByUserRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete all storage objects owned by a specific user"""
+    if current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        return purge_objects_by_user_email(db, request.user_email)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/cleanup/by-age", response_model=CleanupResponse)
+def cleanup_by_age(
+    request: CleanupByAgeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete storage objects older than specified days"""
+    if current_user.trust_level != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return cleanup_objects_older_than(db, request.days)
+
+
 def cleanup_objects_older_than(db: Session, days: int) -> CleanupResponse:
     """Delete storage objects older than specified days"""
     from datetime import datetime, timedelta
