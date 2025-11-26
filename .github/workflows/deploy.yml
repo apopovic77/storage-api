@@ -3,8 +3,7 @@ name: Deploy Storage API
 on:
   push:
     branches:
-      - dev          # Auto-deploy staging on arkserver
-      - main         # Deploy production and trigger SDK regeneration
+      - main         # Deploy production and staging when main is updated
   pull_request:
     branches:
       - dev
@@ -53,10 +52,9 @@ jobs:
     name: Deploy to Staging (arkserver.arkturian.com)
     needs: test
     if: |
-      vars.ENABLE_STAGING_DEPLOY == 'true' && (
-        (github.ref == 'refs/heads/dev' && github.event_name == 'push') ||
-        (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch'))
-      )
+      vars.ENABLE_STAGING_DEPLOY == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment:
       name: staging
@@ -109,8 +107,8 @@ jobs:
             fi
 
             git clean -fdx -e .env
-            git checkout dev
-            git reset --hard origin/dev
+            git checkout main
+            git reset --hard origin/main
 
             # Use venv with Python 3.11 (prefer pyenv if available, fallback to system python3)
             rm -rf venv
