@@ -2765,8 +2765,13 @@ def get_media_variant(
         stored_trim = context_meta.get("trim_bounds")
 
     if not mime.startswith("image/"):
-        # Handle video frame extraction if image format is requested
-        if mime.startswith("video/") and format and format.lower() in ["jpg", "jpeg", "png", "webp"]:
+        # Handle video frame extraction if image format is requested OR variant=thumbnail
+        should_extract_frame = mime.startswith("video/") and (
+            (format and format.lower() in ["jpg", "jpeg", "png", "webp"]) or
+            variant == "thumbnail"
+        )
+
+        if should_extract_frame:
             try:
                 # Extract frame from middle of video
                 import subprocess
@@ -2793,7 +2798,11 @@ def get_media_variant(
                     # Load image from ffmpeg output
                     img = Image.open(BytesIO(frame_result.stdout))
 
-                    # Apply width/height if specified
+                    # Apply width/height if specified (or default thumbnail size)
+                    if variant == "thumbnail" and not width and not height:
+                        # Default thumbnail size
+                        width = 320
+
                     if width or height:
                         w, h = img.size
                         if width and height:
@@ -2805,9 +2814,9 @@ def get_media_variant(
                             new_w = int(w * (height / h))
                             img = img.resize((new_w, height), Image.Resampling.LANCZOS)
 
-                    # Convert to requested format
+                    # Convert to requested format (default to JPEG for thumbnails)
                     buffer = BytesIO()
-                    target_format = format.lower()
+                    target_format = format.lower() if format else "jpg"
                     save_format = "JPEG" if target_format in ["jpg", "jpeg"] else target_format.upper()
 
                     if save_format == "JPEG" and img.mode in {"RGBA", "LA", "P"}:
