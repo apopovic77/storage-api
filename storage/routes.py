@@ -3335,6 +3335,7 @@ async def proxy_external_image(
 @router.get("/objects/{object_id}", response_model=StorageObjectResponse)
 def get_object_metadata(
     object_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     tenant_id: str = Depends(get_tenant_id),
@@ -3346,26 +3347,41 @@ def get_object_metadata(
             StorageObject.id == object_id,
             StorageObject.tenant_id == tenant_id
         ).first()
-    
+
     # If not found and no tenant_id, try public objects
     if not obj:
         obj = db.query(StorageObject).filter(
             StorageObject.id == object_id,
             StorageObject.is_public == True
         ).first()
-    
+
     if not obj:
         raise HTTPException(status_code=404, detail="Not found")
-    
+
     # Check permissions
     if not obj.is_public:
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
         if obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
             raise HTTPException(status_code=403, detail="Forbidden")
-    
+
     response_obj = StorageObjectResponse.from_orm(obj)
-    
+
+    # Build URLs dynamically based on object ID and current request
+    base_url = get_base_url_from_request(request)
+    urls = build_storage_urls(
+        object_id=obj.id,
+        tenant_id=obj.tenant_id,
+        checksum=obj.checksum,
+        metadata_json=obj.metadata_json,
+        base_url=base_url,
+        storage_mode=obj.storage_mode,
+        stored_file_url=obj.file_url if obj.file_url else None,
+    )
+    response_obj.file_url = urls["file_url"]
+    response_obj.thumbnail_url = urls["thumbnail_url"]
+    response_obj.webview_url = urls["webview_url"]
+
     # Check for HLS files if this is a video or pre-transcoded zip
     if (obj.mime_type and obj.mime_type.startswith("video/")) or \
        (obj.mime_type and obj.mime_type in ["application/zip", "application/x-zip-compressed"] and
@@ -3394,7 +3410,7 @@ def get_object_metadata(
                     pass
         except Exception:
             pass
-    
+
     return response_obj
 
 
