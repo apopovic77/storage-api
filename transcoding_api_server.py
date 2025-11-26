@@ -243,7 +243,7 @@ async def process_job(job_id: str):
                 "name": v.name,
                 "resolution": v.resolution,
                 "bitrate_mbps": v.bitrate_mbps,
-                "file_path": str(v.file_path)
+                "file_path": str(v.output_path) if v.output_path else None
             }
             for v in result.variants
         ]
