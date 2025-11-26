@@ -51,20 +51,17 @@ def build_storage_urls(
         if checksum:
             file_url = f"{file_url}?v={checksum}"
 
-    # Thumbnail URL (also uses media endpoint with variant parameter)
-    thumbnail_url = None
-    if metadata_json and metadata_json.get("thumbnail_filename"):
-        # Use the media endpoint with variant=thumbnail
-        thumbnail_url = f"{base_url}/storage/media/{object_id}?variant=thumbnail"
-        if checksum:
-            thumbnail_url = f"{thumbnail_url}&v={checksum}"
+    # Thumbnail URL - ALWAYS generated on-demand via media endpoint
+    # No longer checking for metadata_json.thumbnail_filename - all variants are dynamic
+    thumbnail_url = f"{base_url}/storage/media/{object_id}?variant=thumbnail"
+    if checksum:
+        thumbnail_url = f"{thumbnail_url}&v={checksum}"
 
-    # Webview URL (medium quality variant)
-    webview_url = None
-    if metadata_json and metadata_json.get("webview_filename"):
-        webview_url = f"{base_url}/storage/media/{object_id}?variant=medium"
-        if checksum:
-            webview_url = f"{webview_url}&v={checksum}"
+    # Webview URL - ALWAYS generated on-demand via media endpoint (medium quality variant)
+    # No longer checking for metadata_json.webview_filename - all variants are dynamic
+    webview_url = f"{base_url}/storage/media/{object_id}?variant=medium"
+    if checksum:
+        webview_url = f"{webview_url}&v={checksum}"
 
     return {
         "file_url": file_url,

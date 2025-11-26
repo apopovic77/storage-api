@@ -2869,19 +2869,16 @@ def get_media_variant(
         finally:
             context_meta = obj.ai_context_metadata or {}
 
-    # Thumbnail path - now uses tenant subdirectories
-    # Check metadata_json for thumbnail_filename first (new system)
-    thumb_filename = None
-    if obj.metadata_json and obj.metadata_json.get("thumbnail_filename"):
-        thumb_filename = obj.metadata_json["thumbnail_filename"]
-    elif obj.object_key:
-        # Fallback to old naming convention for backwards compatibility
-        thumb_filename = f"thumb_{Path(obj.object_key).stem}.jpg"
-    else:
-        thumb_filename = f"thumb_ext_{object_id}.jpg"
-
-    # Thumbnails are now stored in tenant subdirectories
-    thumb_path = generic_storage.thumbnails_dir / obj.tenant_id / thumb_filename if thumb_filename else None
+    # DEPRECATED: Pre-generated thumbnails are no longer used
+    # All thumbnails are now generated on-demand via the image processing pipeline below
+    # Keeping this for backwards compatibility with old thumbnail files (if they still exist)
+    thumb_path = None
+    if obj.object_key:
+        # Check if old pre-generated thumbnail exists (backwards compatibility only)
+        old_thumb_filename = f"thumb_{Path(obj.object_key).stem}.jpg"
+        old_thumb_path = generic_storage.thumbnails_dir / obj.tenant_id / old_thumb_filename
+        if old_thumb_path.exists():
+            thumb_path = old_thumb_path
 
     def serve_trimmed_image(
         source_path: Path,
@@ -3015,11 +3012,9 @@ def get_media_variant(
     q = quality or (70 if (display_for == "figma-feed" or variant == "medium") else 90)
     max_edge = None
     if variant == "thumbnail":
-        # Serve existing thumbnail
-        if not apply_trim and thumb_path.exists():
-            return FileResponse(thumb_path, media_type="image/jpeg", headers={"Content-Disposition": "inline"})
-        # Fallback: generate on-the-fly
-        max_edge = 300
+        # ALWAYS generate thumbnails on-the-fly (no longer using pre-generated files)
+        # Pre-generated thumbnails are deprecated - all thumbnails are now dynamic
+        max_edge = 320  # Default thumbnail width (increased from 300 to match video frame extraction)
     elif variant == "full":
         if not apply_trim:
             return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})

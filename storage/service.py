@@ -194,52 +194,49 @@ class GenericStorageService:
                 except Exception as e: # piexif can fail on images without exif
                     print(f"--- Could not load EXIF data for image {file_path}: {e}")
                     pass
-                
+
                 with Image.open(file_path) as img:
                     width, height = img.size
                     original_format = img.format
 
-                    # Create thumbnail (existing functionality) in tenant subdirectory
-                    thumb_name = f"thumb_{Path(filename).stem}.jpg"
-                    tenant_thumb_dir = self._get_tenant_dir(self.thumbnails_dir, tenant_id)
-                    thumb_path = tenant_thumb_dir / thumb_name
-                    thumb_img = img.copy()
-                    if thumb_img.mode in ("RGBA", "LA", "P"):
-                        thumb_img = thumb_img.convert("RGB")
-                    thumb_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-                    thumb_img.save(thumb_path, "JPEG", quality=85, optimize=True)
-                    
-                    # Create web-optimized version (new functionality) in tenant subdirectory
-                    file_ext = Path(filename).suffix.lower()
-                    webview_name = f"web_{Path(filename).stem}{file_ext}"
-                    tenant_webview_dir = self._get_tenant_dir(self.webview_dir, tenant_id)
-                    webview_path = tenant_webview_dir / webview_name
-                    
-                    if max(width, height) > 1920:
-                        webview_img = img.copy()
-                        if width > height:
-                            new_width = 1920
-                            new_height = int((height * 1920) / width)
-                        else:
-                            new_height = 1920
-                            new_width = int((width * 1920) / height)
-                        
-                        webview_img = webview_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        
-                        if original_format in ("PNG", "WEBP"):
-                            webview_img.save(webview_path, original_format, quality=90, optimize=True)
-                        else:
-                            webview_img.save(webview_path, "JPEG", quality=90, optimize=True)
-                        
-                        original_size = file_path.stat().st_size
-                        webview_size = webview_path.stat().st_size
-                        size_reduction_percent = ((original_size - webview_size) / original_size) * 100
-                        
-                        if webview_size >= original_size * 0.85:
-                            webview_path.unlink()
-                            webview_path = None
-                    else:
-                        pass # Image is already web-friendly
+                    # DEPRECATED: Thumbnails are now generated on-demand via /storage/media endpoint
+                    # No longer pre-generating thumbnails at upload time
+                    # Old code (kept for reference):
+                    # thumb_name = f"thumb_{Path(filename).stem}.jpg"
+                    # tenant_thumb_dir = self._get_tenant_dir(self.thumbnails_dir, tenant_id)
+                    # thumb_path = tenant_thumb_dir / thumb_name
+                    # thumb_img = img.copy()
+                    # if thumb_img.mode in ("RGBA", "LA", "P"):
+                    #     thumb_img = thumb_img.convert("RGB")
+                    # thumb_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                    # thumb_img.save(thumb_path, "JPEG", quality=85, optimize=True)
+
+                    # DEPRECATED: Webview variants are now generated on-demand via /storage/media endpoint
+                    # No longer pre-generating web-optimized versions at upload time
+                    # Old code (kept for reference):
+                    # file_ext = Path(filename).suffix.lower()
+                    # webview_name = f"web_{Path(filename).stem}{file_ext}"
+                    # tenant_webview_dir = self._get_tenant_dir(self.webview_dir, tenant_id)
+                    # webview_path = tenant_webview_dir / webview_name
+                    # if max(width, height) > 1920:
+                    #     webview_img = img.copy()
+                    #     if width > height:
+                    #         new_width = 1920
+                    #         new_height = int((height * 1920) / width)
+                    #     else:
+                    #         new_height = 1920
+                    #         new_width = int((width * 1920) / height)
+                    #     webview_img = webview_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    #     if original_format in ("PNG", "WEBP"):
+                    #         webview_img.save(webview_path, original_format, quality=90, optimize=True)
+                    #     else:
+                    #         webview_img.save(webview_path, "JPEG", quality=90, optimize=True)
+                    #     original_size = file_path.stat().st_size
+                    #     webview_size = webview_path.stat().st_size
+                    #     size_reduction_percent = ((original_size - webview_size) / original_size) * 100
+                    #     if webview_size >= original_size * 0.85:
+                    #         webview_path.unlink()
+                    #         webview_path = None
             
             elif mime_type.startswith("video/"):
                 print(f"--- Analyzing video for GPS: {file_path}")
@@ -250,7 +247,7 @@ class GenericStorageService:
                 ]
                 result = subprocess.run(probe_cmd, capture_output=True, text=True)
                 probe_data = json.loads(result.stdout)
-                
+
                 if 'format' in probe_data:
                     duration = float(probe_data['format'].get('duration', 0))
                     bit_rate = int(probe_data['format'].get('bit_rate', 0))
@@ -259,13 +256,15 @@ class GenericStorageService:
                 if video_stream:
                     width = int(video_stream.get('width', 0))
                     height = int(video_stream.get('height', 0))
-                    thumb_name = f"thumb_{Path(filename).stem}.jpg"
-                    tenant_thumb_dir = self._get_tenant_dir(self.thumbnails_dir, tenant_id)
-                    thumb_path = tenant_thumb_dir / thumb_name
-                    
-                    seek_time = "00:00:00.100" if duration < 2.0 else "00:00:01.000"
-                    
-                    os.system(f"ffmpeg -y -i {file_path} -ss {seek_time} -vframes 1 -vf 'scale=300:-1' {thumb_path} > /dev/null 2>&1")
+
+                    # DEPRECATED: Video thumbnails are now generated on-demand via /storage/media endpoint
+                    # No longer pre-generating thumbnails at upload time using ffmpeg
+                    # Old code (kept for reference):
+                    # thumb_name = f"thumb_{Path(filename).stem}.jpg"
+                    # tenant_thumb_dir = self._get_tenant_dir(self.thumbnails_dir, tenant_id)
+                    # thumb_path = tenant_thumb_dir / thumb_name
+                    # seek_time = "00:00:00.100" if duration < 2.0 else "00:00:01.000"
+                    # os.system(f"ffmpeg -y -i {file_path} -ss {seek_time} -vframes 1 -vf 'scale=300:-1' {thumb_path} > /dev/null 2>&1")
             
             elif mime_type.startswith("audio/"):
                 # No GPS for audio, but get other metadata
@@ -289,13 +288,13 @@ class GenericStorageService:
         except Exception as e:
             print(f"Metadata extraction failed for {filename}: {e}")
 
-        # Store thumbnail and webview filenames (not URLs - those are built dynamically)
-        thumb_filename = thumb_path.name if thumb_path and thumb_path.exists() else None
-        webview_filename = webview_path.name if webview_path and webview_path.exists() else None
+        # DEPRECATED: No longer storing thumbnail_filename or webview_filename
+        # Thumbnails and variants are now generated on-demand via /storage/media endpoint
+        # The url_builder will NOT check for these fields - all variants are generated dynamically
 
         return {
-            "thumbnail_filename": thumb_filename,
-            "webview_filename": webview_filename,
+            # "thumbnail_filename": None,  # DEPRECATED: Not needed anymore
+            # "webview_filename": None,     # DEPRECATED: Not needed anymore
             "width": width,
             "height": height,
             "duration_seconds": duration,
