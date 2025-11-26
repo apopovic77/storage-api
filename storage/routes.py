@@ -3658,14 +3658,6 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
     except Exception as e:
         print(f"Error cleaning transcoding queue: {e}")
 
-    try:
-        basename = Path(obj.object_key).stem
-        hls_dir_path = generic_storage.absolute_path_for_key(obj.object_key, obj.tenant_id).parent / basename
-        if hls_dir_path.is_dir():
-            shutil.rmtree(hls_dir_path)
-    except Exception as e:
-        print(f"Error deleting HLS directory for {obj.object_key}: {e}")
-
     # CASCADE DELETE: Find and delete all linked child objects
     linked_children = db.query(StorageObject).filter(
         StorageObject.link_id == str(obj.id)
@@ -3685,9 +3677,9 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
                 print(f"  ⚠️  Warning: Could not delete embedding for child {child.id}: {e}")
 
             try:
-                # Delete child's physical file (if not external)
+                # Delete child's physical file and all derived assets (if not external)
                 if child.storage_mode != "external":
-                    generic_storage.delete(child.object_key)
+                    generic_storage.delete(child.object_key, child.tenant_id)
                 print(f"  🗑️  Deleted child storage object {child.id}")
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not delete file for child {child.id}: {e}")
@@ -3715,9 +3707,10 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
     except Exception as e:
         print(f"Warning: Could not delete async tasks for object {obj.id}: {e}")
 
-    # Delete physical file (only if not external/reference mode)
+    # Delete physical file and all derived assets (only if not external/reference mode)
+    # This will delete: original file, thumbnails, webview versions, and HLS directories
     if obj.storage_mode not in ["external", "reference"]:
-        generic_storage.delete(obj.object_key)
+        generic_storage.delete(obj.object_key, obj.tenant_id)
     db.delete(obj)
     db.commit()
     return {"message": "deleted", "cascade_deleted": len(linked_children) if linked_children else 0}
