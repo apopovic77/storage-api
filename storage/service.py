@@ -1253,65 +1253,57 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         print(f"--- SUCCESS: Thumbnail extraction complete for {file_path}")
                         _append_ai_queue_line(f"{storage_obj.id}|video|{ai_thumb_dir}|{storage_obj.original_filename}\n")
 
-                # Submit all videos to Mac transcoding (regardless of file size)
+                # Trigger video transcoding using TranscodingHelper
                 file_size = file_path.stat().st_size
                 size_mb = file_size / (1024 * 1024)
 
-                print(f"--- Video file ({size_mb:.1f}MB), attempting Mac transcoding delegation")
+                print(f"--- Video file ({size_mb:.1f}MB), checking for transcoding")
                 try:
-                    from mac_transcoding_client import mac_transcoding_client
+                    from storage.transcoding_helper import TranscodingHelper
+                    from pathlib import Path
 
-                    # Check if Mac API is available
-                    mac_available = mac_transcoding_client.is_available()
+                    # Check if transcoding is enabled and should be done
+                    if TranscodingHelper.is_enabled() and TranscodingHelper.should_transcode(storage_obj.mime_type):
+                        print(f"🎬 Transcoding enabled, starting background transcoding for storage object {storage_obj.id}")
 
-                    if mac_available:
-                        # Submit to Mac for transcoding
-                        callback_url = settings.TRANSCODING_CALLBACK_URL or f"{settings.BASE_URL}/storage/transcode/callback"
-                        job_id = mac_transcoding_client.submit_job(
-                            str(file_path),
-                            file_size,
-                            storage_obj.original_filename,
-                            callback_url,
-                            str(storage_obj.id)
-                        )
+                        # Mark in database that transcoding is starting
+                        from datetime import datetime, timezone
+                        from database import SessionLocal
+                        from models import StorageObject
 
-                        if job_id:
-                            print(f"--- SUCCESS: Submitted to Mac transcoding: {job_id}")
-                            # Mark in database that this is being processed by Mac
-                            # Store the Mac job_id in the metadata_json field for tracking
-                            from datetime import datetime, timezone
-                            from database import SessionLocal
-
-                            # Create new DB session for this operation
-                            db_session = SessionLocal()
-                            try:
-                                # Get the object in this session by ID
-                                storage_obj_id = storage_obj.id
-                                from models import StorageObject
-                                storage_obj_refresh = db_session.get(StorageObject, storage_obj_id)
-
+                        db_session = SessionLocal()
+                        try:
+                            storage_obj_refresh = db_session.get(StorageObject, storage_obj.id)
+                            if storage_obj_refresh:
+                                storage_obj_refresh.transcoding_status = "processing"
                                 if not storage_obj_refresh.metadata_json:
                                     storage_obj_refresh.metadata_json = {}
-                                storage_obj_refresh.metadata_json['mac_job_id'] = job_id
-                                storage_obj_refresh.metadata_json['mac_submitted_at'] = datetime.now(timezone.utc).isoformat()
-                                storage_obj_refresh.transcoding_status = "processing"
-
+                                storage_obj_refresh.metadata_json['transcoding_started_at'] = datetime.now(timezone.utc).isoformat()
                                 db_session.commit()
-                                print(f"✅ Database updated with mac_job_id: {job_id}")
-                            finally:
-                                db_session.close()
+                                print(f"✅ Database updated - transcoding status: processing")
+                        finally:
+                            db_session.close()
 
-                            print(f"--- Mac job {job_id} submitted successfully")
-                            # Successfully submitted to Mac - skip local transcoding for now
-                            return  # Exit this function early
-                        else:
-                            raise Exception("Mac API rejected job")
+                        # Get output directory
+                        source_path = Path(file_path)
+                        output_dir = source_path.parent / f"{source_path.stem}_transcoded"
+
+                        # Start background transcoding
+                        TranscodingHelper.start_background_transcoding(
+                            source_path,
+                            output_dir,
+                            storage_obj.id
+                        )
+
+                        print(f"✅ Background transcoding started for storage object {storage_obj.id}")
                     else:
-                        raise Exception("Mac API unavailable")
+                        print(f"ℹ️  Transcoding disabled or not needed for this file type")
 
-                except Exception as mac_error:
-                    print(f"!!! Mac transcoding failed ({mac_error}) - skipping transcoding completely")
-                    return  # Exit without fallback
+                except Exception as transcoding_error:
+                    print(f"⚠️  Transcoding failed to start: {transcoding_error}")
+                    import traceback
+                    traceback.print_exc()
+                    # Don't fail the upload if transcoding fails to start
                         
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("image/"):
             # Image processing - resize and optimize for AI safety analysis
