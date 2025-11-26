@@ -2698,6 +2698,41 @@ def get_asset_variant_references_batch(
     return {"results": results_map}
 
 
+@router.head("/media/{object_id}")
+def head_media_variant(
+    object_id: int,
+    variant: Optional[str] = Query(None, description="thumbnail | medium | full"),
+    db: Session = Depends(get_db),
+):
+    """
+    Lightweight HEAD handler so clients (e.g., Unity/AVFoundation) can probe media files.
+    Unity's VideoPlayer sends a HEAD request before streaming; without this we return 405,
+    which causes AVFoundation to believe the file is invalid/no video tracks.
+    """
+    obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Re-use original resolver so we report actual file details.
+    # For HEAD it is enough to resolve the source path without heavy processing.
+    src_path = _resolve_storage_object_path(obj, refresh=False)
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="Media file missing")
+
+    media_type = (obj.mime_type or "application/octet-stream")
+    headers = {
+        "Content-Type": media_type,
+        "Accept-Ranges": "bytes",
+    }
+    try:
+        headers["Content-Length"] = str(src_path.stat().st_size)
+    except Exception:
+        pass
+
+    # Starlette will strip the body for HEAD responses automatically.
+    return Response(status_code=200, headers=headers)
+
+
 @router.get("/media/{object_id}")
 def get_media_variant(
     object_id: int,
