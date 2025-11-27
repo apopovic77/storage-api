@@ -130,7 +130,7 @@ jobs:
             systemctl restart transcoding-api.service || true
             sleep 5
             systemctl status storage-api.service --no-pager
-            curl -fsS --max-time 10 http://127.0.0.1:8001/health || { journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
+            curl -fsS --max-time 10 http://127.0.0.1:8080/health || { journalctl -u storage-api.service -n 50 --no-pager; exit 1; }
 
   deploy-production:
     name: Deploy to Production
