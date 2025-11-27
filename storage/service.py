@@ -1073,6 +1073,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
     try:
         import shutil
         import httpx
+        from pathlib import Path
         from config import settings
 
         # Extract tenant_id from storage_obj or default to arkturian
@@ -1260,7 +1261,6 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                 print(f"--- Video file ({size_mb:.1f}MB), checking for transcoding")
                 try:
                     from storage.transcoding_helper import TranscodingHelper
-                    from pathlib import Path
 
                     # Check if transcoding is enabled and should be done
                     if TranscodingHelper.is_enabled() and TranscodingHelper.should_transcode(storage_obj.mime_type):
