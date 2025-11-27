@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Form
 from pydantic import BaseModel
 import httpx
 
@@ -89,40 +89,57 @@ async def health():
 
 
 @app.post("/transcode")
-async def transcode(request: TranscodeRequest, background_tasks: BackgroundTasks):
+async def transcode(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None
+):
     """
-    Submit a transcoding job
+    Submit a transcoding job via file upload
 
     The job will be processed in the background. Use GET /status/{job_id} to check progress.
     """
     if not TRANSCODING_AVAILABLE:
         raise HTTPException(status_code=503, detail="Transcoding package not available")
 
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+
+    # Save uploaded file to temp directory
+    temp_dir = Path(f"/tmp/transcode_{job_id}")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    source_file = temp_dir / file.filename
+
+    # Write uploaded file
+    with open(source_file, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    logging.info(f"📥 Received file: {file.filename} ({len(content)} bytes)")
+
     # Create job record
     job = {
-        "job_id": request.job_id,
+        "job_id": job_id,
         "status": "queued",
         "progress": 0,
         "message": "Job queued",
-        "source_url": request.source_url,
-        "callback_url": request.callback_url,
-        "storage_object_id": request.storage_object_id,
-        "original_filename": request.original_filename,
-        "download_headers": request.download_headers or {},
+        "source_file": str(source_file),
+        "original_filename": file.filename,
+        "file_size": len(content),
         "started_at": datetime.utcnow().isoformat(),
         "completed_at": None,
         "error": None
     }
 
-    jobs[request.job_id] = job
+    jobs[job_id] = job
 
     # Start processing in background
-    background_tasks.add_task(process_job, request.job_id)
+    background_tasks.add_task(process_job_from_file, job_id)
 
-    logging.info(f"📤 Transcoding job queued: {request.job_id} - {request.original_filename}")
+    logging.info(f"📤 Transcoding job queued: {job_id} - {file.filename}")
 
     return {
-        "job_id": request.job_id,
+        "job_id": job_id,
         "status": "queued",
         "message": "Job queued for processing"
     }
@@ -167,15 +184,15 @@ async def cancel_job(job_id: str):
     return {"message": "Job cancelled", "job_id": job_id}
 
 
-async def process_job(job_id: str):
+async def process_job_from_file(job_id: str):
     """
-    Process a transcoding job in the background
+    Process a transcoding job from uploaded file
 
     Steps:
-    1. Download source file from source_url
+    1. File already uploaded
     2. Transcode using local FFmpeg
     3. Upload results back (TODO: implement upload to storage)
-    4. Call callback URL
+    4. Call callback URL (if provided)
     """
     global current_job_id
 
@@ -183,36 +200,18 @@ async def process_job(job_id: str):
     current_job_id = job_id
 
     try:
-        # Step 1: Download source file
-        job["status"] = "downloading"
-        job["progress"] = 10
-        job["message"] = "Downloading source file"
-        logging.info(f"⬇️  Downloading: {job['source_url']}")
+        source_file = Path(job["source_file"])
 
-        # Create temp directory for this job
-        temp_dir = Path(f"/tmp/transcode_{job_id}")
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"📁 Processing file: {source_file} ({job['file_size']} bytes)")
 
-        source_file = temp_dir / job["original_filename"]
-
-        # Download file
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            headers = job["download_headers"]
-            response = await client.get(job["source_url"], headers=headers)
-            response.raise_for_status()
-
-            source_file.write_bytes(response.content)
-
-        logging.info(f"✅ Downloaded: {source_file} ({source_file.stat().st_size} bytes)")
-
-        # Step 2: Transcode
+        # Step 1: Transcode
         job["status"] = "transcoding"
         job["progress"] = 30
         job["message"] = "Transcoding video"
         logging.info(f"🎬 Transcoding: {source_file}")
 
         # Create output directory
-        output_dir = temp_dir / "output"
+        output_dir = source_file.parent / "output"
         output_dir.mkdir(exist_ok=True)
 
         # Create transcoder
@@ -229,10 +228,7 @@ async def process_job(job_id: str):
         for variant in result.variants:
             logging.info(f"   - {variant.name}: {variant.resolution} @ {variant.bitrate_mbps:.1f} Mbps")
 
-        # Step 3: Upload results (TODO)
-        # For now, we'll just leave files in temp_dir and let storage-api handle it
-        # In the future, we could upload back to storage or return file paths
-
+        # Job completed
         job["status"] = "completed"
         job["progress"] = 100
         job["message"] = f"Transcoding completed - {len(result.variants)} variants created"
@@ -250,23 +246,6 @@ async def process_job(job_id: str):
 
         logging.info(f"✅ Job completed: {job_id}")
 
-        # Step 4: Call callback URL
-        if job["callback_url"]:
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    await client.post(
-                        job["callback_url"],
-                        json={
-                            "job_id": job_id,
-                            "status": "completed",
-                            "storage_object_id": job["storage_object_id"],
-                            "output_dir": str(output_dir)
-                        }
-                    )
-                logging.info(f"✅ Callback sent to: {job['callback_url']}")
-            except Exception as callback_error:
-                logging.error(f"⚠️  Callback failed: {callback_error}")
-
     except Exception as e:
         logging.error(f"❌ Job failed: {job_id} - {str(e)}")
         import traceback
@@ -277,22 +256,6 @@ async def process_job(job_id: str):
         job["error"] = str(e)
         job["message"] = "Transcoding failed"
         job["completed_at"] = datetime.utcnow().isoformat()
-
-        # Call callback with failure
-        if job.get("callback_url"):
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    await client.post(
-                        job["callback_url"],
-                        json={
-                            "job_id": job_id,
-                            "status": "failed",
-                            "storage_object_id": job["storage_object_id"],
-                            "error": str(e)
-                        }
-                    )
-            except Exception:
-                pass
 
     finally:
         current_job_id = None
