@@ -39,5 +39,5 @@ python-dotenv==1.0.0
 # Authentication
 passlib[bcrypt]==1.7.4
 
-# Video Transcoding
+# Video Transcoding (with status polling for completion tracking)
 git+https://github.com/apopovic77/mac-transcoding-api.git@main
