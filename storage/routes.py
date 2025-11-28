@@ -1779,6 +1779,12 @@ async def upload_file(
     tenant_id: Optional[str] = Depends(get_tenant_id),
 ):
     data = await file.read()
+
+    # ENTRY POINT LOG - verify upload function is called
+    import logging
+    _entry_logger = logging.getLogger("upload_entry")
+    _entry_logger.error(f"🚀 UPLOAD_FILE CALLED: filename={file.filename}, size={len(data)}, context={context}")
+
     try:
         # Special handling for HLS results: get tenant/owner from original video
         if reference_id and hls_result:
