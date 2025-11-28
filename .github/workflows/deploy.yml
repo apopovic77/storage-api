@@ -120,7 +120,10 @@ jobs:
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
 
-            # Install dependencies (transcoding package is installed from local path)
+            # Replace transcoding package URL with local path for deployment
+            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@main|/var/code/mac-transcoding-api|g' requirements.txt
+
+            # Install dependencies (transcoding package now uses local path)
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service
@@ -200,7 +203,10 @@ jobs:
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
 
-            # Install dependencies (transcoding package is installed from local path)
+            # Replace transcoding package URL with local path for deployment
+            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@main|/var/code/mac-transcoding-api|g' requirements.txt
+
+            # Install dependencies (transcoding package now uses local path)
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service
