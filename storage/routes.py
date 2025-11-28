@@ -1963,20 +1963,23 @@ async def upload_file(
             # Normal upload logic
             existing = None
             if reuse_existing:
-                # Calculate checksum first for deduplication
-                import hashlib
-                checksum = hashlib.sha256(data).hexdigest()
-
-                # Check for existing upload by checksum (content-based deduplication)
+                # Check for existing upload by URI or filename (not checksum)
                 existing_q = db.query(StorageObject).filter(
                     StorageObject.owner_user_id == target_owner_id,
-                    StorageObject.checksum == checksum,
                     StorageObject.tenant_id == tenant_id,
                 )
-                existing = existing_q.order_by(StorageObject.created_at.desc()).first()
 
-                if existing:
-                    print(f"♻️  Reusing existing storage object {existing.id} (checksum match: {checksum[:16]}...)")
+                # Match by external_uri if provided, otherwise by filename
+                if external_uri:
+                    existing_q = existing_q.filter(StorageObject.external_uri == external_uri)
+                    existing = existing_q.order_by(StorageObject.created_at.desc()).first()
+                    if existing:
+                        print(f"♻️  Reusing existing storage object {existing.id} (external_uri match: {external_uri})")
+                elif file.filename:
+                    existing_q = existing_q.filter(StorageObject.original_filename == file.filename)
+                    existing = existing_q.order_by(StorageObject.created_at.desc()).first()
+                    if existing:
+                        print(f"♻️  Reusing existing storage object {existing.id} (filename match: {file.filename})")
 
             # Build AI context metadata from parameters
             ai_context_metadata = {}
