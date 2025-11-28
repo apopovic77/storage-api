@@ -144,6 +144,13 @@ jobs:
             # Install dependencies (transcoding package now uses local path)
             pip install --no-cache-dir -r requirements.txt
 
+            # Update transcoding service if it exists (only on servers with local transcoding)
+            if [ -f /etc/systemd/system/transcoding-api.service ]; then
+              echo "Updating transcoding-api.service..."
+              cp transcoding-api.service /etc/systemd/system/
+              systemctl daemon-reload
+            fi
+
             systemctl restart storage-api.service
             systemctl restart transcoding-api.service || true
             sleep 5
@@ -241,6 +248,13 @@ jobs:
 
             # Install dependencies (transcoding package now uses local path)
             pip install --no-cache-dir -r requirements.txt
+
+            # Update transcoding service if it exists (only on servers with local transcoding)
+            if [ -f /etc/systemd/system/transcoding-api.service ]; then
+              echo "Updating transcoding-api.service..."
+              cp transcoding-api.service /etc/systemd/system/
+              systemctl daemon-reload
+            fi
 
             systemctl restart storage-api.service
             systemctl restart transcoding-api.service || true
