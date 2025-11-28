@@ -124,7 +124,9 @@ jobs:
             rm -rf ~/.cache/pip
 
             # Configure git to use GitHub PAT for private repos (for transcoding package)
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+            export GIT_CONFIG_VALUE_0="https://github.com/"
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service
@@ -205,7 +207,9 @@ jobs:
             rm -rf ~/.cache/pip
 
             # Configure git to use GitHub PAT for private repos (for transcoding package)
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+            export GIT_CONFIG_VALUE_0="https://github.com/"
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service
