@@ -144,6 +144,8 @@ jobs:
     environment:
       name: production
       url: https://api-storage.arkturian.com
+    env:
+      GH_TOKEN: ${{ secrets.PAT_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
