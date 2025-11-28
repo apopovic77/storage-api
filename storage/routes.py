@@ -1778,6 +1778,12 @@ async def upload_file(
     api_key_header: Optional[str] = Security(_APIKeyHeader(name="X-API-KEY", auto_error=False)),
     tenant_id: Optional[str] = Depends(get_tenant_id),
 ):
+    # DIRECT FILE WRITE - bypass all logging
+    with open("/tmp/upload_debug.log", "a") as f:
+        import datetime
+        f.write(f"{datetime.datetime.now()} - UPLOAD ENTRY: filename={file.filename}\n")
+        f.flush()
+
     # FIRST LINE LOG - before anything else
     import logging
     glogger = logging.getLogger("gunicorn.error")
