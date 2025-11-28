@@ -88,19 +88,55 @@ class TranscodingHelper:
             # Transcode (this will run async)
             result = await transcoder.transcode(source_path, output_dir)
 
-            if result.success:
-                logging.info(f"✅ Transcoding completed for storage object {storage_object_id}")
-                logging.info(f"   Created {len(result.variants)} variants")
-                for variant in result.variants:
-                    logging.info(f"      - {variant.name}: {variant.resolution} @ {variant.bitrate_mbps:.1f} Mbps")
+            # Update database with transcoding result
+            from database import SessionLocal
+            from models import StorageObject
 
-                if result.thumbnails:
-                    logging.info(f"   Generated {len(result.thumbnails)} thumbnails")
+            db_session = SessionLocal()
+            try:
+                storage_obj = db_session.get(StorageObject, storage_object_id)
+                if storage_obj:
+                    if result.success:
+                        logging.info(f"✅ Transcoding completed for storage object {storage_object_id}")
+                        logging.info(f"   Created {len(result.variants)} variants")
+                        for variant in result.variants:
+                            logging.info(f"      - {variant.name}: {variant.resolution} @ {variant.bitrate_mbps:.1f} Mbps")
 
-                return True
-            else:
-                logging.error(f"❌ Transcoding failed for storage object {storage_object_id}: {result.error}")
-                return False
+                        if result.thumbnails:
+                            logging.info(f"   Generated {len(result.thumbnails)} thumbnails")
+
+                        # Update database status
+                        storage_obj.transcoding_status = "completed"
+                        storage_obj.transcoding_progress = 100
+                        storage_obj.transcoding_error = None
+
+                        # Set HLS URL (master.m3u8 in output directory)
+                        hls_master = output_dir / "master.m3u8"
+                        if hls_master.exists():
+                            # Construct public URL for HLS master playlist
+                            # URL structure: /uploads/storage/media/{tenant}/{object_key}/master.m3u8
+                            tenant_id = storage_obj.metadata_json.get("tenant_id", "arkturian") if storage_obj.metadata_json else "arkturian"
+                            base_key = storage_obj.object_key.rsplit(".", 1)[0]  # Remove .mp4 extension
+                            storage_obj.hls_url = f"/uploads/storage/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
+                            logging.info(f"   HLS URL set to: {storage_obj.hls_url}")
+
+                        db_session.commit()
+                        logging.info(f"   Database updated - status: completed")
+                        return True
+                    else:
+                        logging.error(f"❌ Transcoding failed for storage object {storage_object_id}: {result.error}")
+
+                        # Update database with failure
+                        storage_obj.transcoding_status = "failed"
+                        storage_obj.transcoding_error = str(result.error)
+                        db_session.commit()
+                        logging.info(f"   Database updated - status: failed")
+                        return False
+                else:
+                    logging.error(f"Storage object {storage_object_id} not found in database")
+                    return False
+            finally:
+                db_session.close()
 
         except Exception as e:
             logging.error(f"❌ Transcoding error for storage object {storage_object_id}: {e}")
