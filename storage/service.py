@@ -1070,6 +1070,12 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
         storage_obj: StorageObject instance with mime_type, id, and object_key
         db: SQLAlchemy session to use for database operations
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.error(f"🔥 enqueue_ai_safety_and_transcoding CALLED for storage object {storage_obj.id}")
+    logger.error(f"   mime_type: {storage_obj.mime_type}")
+    logger.error(f"   skip_ai_safety: {skip_ai_safety}")
+
     try:
         import shutil
         import httpx
@@ -1258,13 +1264,18 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                 file_size = file_path.stat().st_size
                 size_mb = file_size / (1024 * 1024)
 
-                print(f"--- Video file ({size_mb:.1f}MB), checking for transcoding")
+                logger.error(f"🎬 Video file ({size_mb:.1f}MB), checking for transcoding for object {storage_obj.id}")
                 try:
                     from storage.transcoding_helper import TranscodingHelper
 
+                    is_enabled = TranscodingHelper.is_enabled()
+                    should_transcode = TranscodingHelper.should_transcode(storage_obj.mime_type)
+                    logger.error(f"   TranscodingHelper.is_enabled() = {is_enabled}")
+                    logger.error(f"   TranscodingHelper.should_transcode('{storage_obj.mime_type}') = {should_transcode}")
+
                     # Check if transcoding is enabled and should be done
-                    if TranscodingHelper.is_enabled() and TranscodingHelper.should_transcode(storage_obj.mime_type):
-                        print(f"🎬 Transcoding enabled, starting background transcoding for storage object {storage_obj.id}")
+                    if is_enabled and should_transcode:
+                        logger.error(f"✅ Transcoding enabled, starting background transcoding for storage object {storage_obj.id}")
 
                         # Mark in database that transcoding is starting
                         from datetime import datetime, timezone
