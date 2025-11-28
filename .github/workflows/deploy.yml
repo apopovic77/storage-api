@@ -74,7 +74,10 @@ jobs:
           port: ${{ secrets.DEPLOY_PORT }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
+          envs: GH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        script: |
             set -euo pipefail
             apt-get update -y
             apt-get install -y ca-certificates python3-venv
@@ -124,6 +127,9 @@ jobs:
             source venv/bin/activate
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
+
+            # Configure git to use GitHub PAT for private repos (for transcoding package)
+            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service
