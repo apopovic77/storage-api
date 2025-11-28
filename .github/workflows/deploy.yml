@@ -85,12 +85,7 @@ jobs:
             export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
             export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
-            TARGET_DIR="/var/www/storage-api"
-            if [ -d /var/www/api-storage ]; then
-              TARGET_DIR="/var/www/api-storage"
-            elif [ -d /var/www/api-storage.arkturian.com ]; then
-              TARGET_DIR="/var/www/api-storage.arkturian.com"
-            fi
+            TARGET_DIR="/var/www/api-storage.arkturian.com"
 
             git config --global --add safe.directory "$TARGET_DIR"
             mkdir -p "$TARGET_DIR"
@@ -163,12 +158,7 @@ jobs:
           script: |
             set -euo pipefail
 
-            TARGET_DIR="/var/www/storage-api"
-            if [ -d /var/www/api-storage ]; then
-              TARGET_DIR="/var/www/api-storage"
-            elif [ -d /var/www/api-storage.arkturian.com ]; then
-              TARGET_DIR="/var/www/api-storage.arkturian.com"
-            fi
+            TARGET_DIR="/var/www/api-storage.arkturian.com"
 
             git config --global --add safe.directory "$TARGET_DIR"
             mkdir -p "$TARGET_DIR"
