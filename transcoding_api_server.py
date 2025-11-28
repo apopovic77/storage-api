@@ -14,7 +14,13 @@ from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+
+# Configure logging at module level
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 from pydantic import BaseModel
 import httpx
 
@@ -90,13 +96,14 @@ async def health():
 
 @app.post("/transcode")
 async def transcode(
-    file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None
+    file: UploadFile = File(...)
 ):
     """
     Submit a transcoding job via file upload
 
-    The job will be processed in the background. Use GET /status/{job_id} to check progress.
+    NOTE: Job is processed synchronously (awaited) instead of using BackgroundTasks
+    because background tasks get cancelled when HTTP response is sent in uvicorn workers.
+    The caller should use httpx with a long timeout.
     """
     if not TRANSCODING_AVAILABLE:
         raise HTTPException(status_code=503, detail="Transcoding package not available")
@@ -133,15 +140,19 @@ async def transcode(
 
     jobs[job_id] = job
 
-    # Start processing in background
-    background_tasks.add_task(process_job_from_file, job_id)
+    logging.info(f"📤 Starting transcoding job: {job_id} - {file.filename}")
 
-    logging.info(f"📤 Transcoding job queued: {job_id} - {file.filename}")
+    # Process job synchronously (await completion)
+    await process_job_from_file(job_id)
 
+    # Return final job status
     return {
         "job_id": job_id,
-        "status": "queued",
-        "message": "Job queued for processing"
+        "status": jobs[job_id]["status"],
+        "message": jobs[job_id]["message"],
+        "error": jobs[job_id].get("error"),
+        "output_dir": jobs[job_id].get("output_dir"),
+        "variants": jobs[job_id].get("variants", [])
     }
 
 

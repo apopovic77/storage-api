@@ -181,7 +181,8 @@ class TranscodingHelper:
 
             # Send POST request directly to transcoding-api
             # The transcoding-api will queue the job and return immediately
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            # Long timeout since transcoding is now synchronous (can take several minutes)
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 # First check if transcoding-api is available
                 try:
                     health_response = await client.get(f"{settings.TRANSCODING_API_URL}/health")
@@ -212,11 +213,80 @@ class TranscodingHelper:
                     if response.status_code == 200:
                         result = response.json()
                         job_id = result.get("job_id")
-                        logging.error(f"✅ Transcoding job queued successfully!")
-                        logging.error(f"   Job ID: {job_id}")
-                        logging.error(f"   Storage Object: {storage_object_id}")
+                        status = result.get("status")
+                        output_dir_str = result.get("output_dir")
+                        variants = result.get("variants", [])
+                        error = result.get("error")
 
-                        # Store job_id in database for status tracking
+                        logging.error(f"✅ Transcoding response received!")
+                        logging.error(f"   Job ID: {job_id}")
+                        logging.error(f"   Status: {status}")
+                        logging.error(f"   Output Dir: {output_dir_str}")
+                        logging.error(f"   Variants: {len(variants)}")
+
+                        from database import SessionLocal
+                        from models import StorageObject
+                        import shutil
+
+                        db_session = SessionLocal()
+                        try:
+                            storage_obj = db_session.get(StorageObject, storage_object_id)
+                            if storage_obj:
+                                if status == "completed" and output_dir_str:
+                                    # Copy transcoded files to storage location
+                                    output_source = Path(output_dir_str)
+
+                                    # Determine destination directory (next to original file)
+                                    tenant_id = storage_obj.metadata_json.get("tenant_id", "arkturian") if storage_obj.metadata_json else "arkturian"
+                                    base_key = storage_obj.object_key.rsplit(".", 1)[0]  # Remove extension
+
+                                    hls_dest_dir = Path(settings.STORAGE_UPLOAD_DIR) / "media" / tenant_id / f"{base_key}_transcoded"
+                                    hls_dest_dir.mkdir(parents=True, exist_ok=True)
+
+                                    logging.error(f"📁 Copying HLS files from {output_source} to {hls_dest_dir}")
+
+                                    # Copy all HLS files
+                                    for item in output_source.iterdir():
+                                        dest_path = hls_dest_dir / item.name
+                                        if item.is_file():
+                                            shutil.copy2(item, dest_path)
+                                            logging.error(f"   Copied: {item.name}")
+
+                                    # Update database
+                                    storage_obj.transcoding_status = "completed"
+                                    storage_obj.transcoding_progress = 100
+                                    storage_obj.transcoding_error = None
+                                    storage_obj.hls_url = f"/uploads/storage/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
+
+                                    if not storage_obj.metadata_json:
+                                        storage_obj.metadata_json = {}
+                                    storage_obj.metadata_json['transcoding_job_id'] = job_id
+                                    storage_obj.metadata_json['transcoding_variants'] = variants
+
+                                    db_session.commit()
+                                    logging.error(f"✅ Database updated - transcoding completed!")
+                                    logging.error(f"   HLS URL: {storage_obj.hls_url}")
+
+                                    # Cleanup temp directory
+                                    try:
+                                        shutil.rmtree(output_source.parent)
+                                        logging.error(f"🧹 Cleaned up temp directory")
+                                    except Exception as cleanup_err:
+                                        logging.error(f"⚠️ Failed to cleanup temp dir: {cleanup_err}")
+
+                                elif status == "failed":
+                                    storage_obj.transcoding_status = "failed"
+                                    storage_obj.transcoding_error = error or "Transcoding failed"
+                                    db_session.commit()
+                                    logging.error(f"❌ Transcoding failed: {error}")
+                                else:
+                                    logging.error(f"⚠️ Unexpected status: {status}")
+                        finally:
+                            db_session.close()
+                    else:
+                        logging.error(f"❌ Transcoding API error: {response.status_code} - {response.text}")
+
+                        # Update database with failure
                         from database import SessionLocal
                         from models import StorageObject
 
@@ -224,15 +294,11 @@ class TranscodingHelper:
                         try:
                             storage_obj = db_session.get(StorageObject, storage_object_id)
                             if storage_obj:
-                                if not storage_obj.metadata_json:
-                                    storage_obj.metadata_json = {}
-                                storage_obj.metadata_json['transcoding_job_id'] = job_id
+                                storage_obj.transcoding_status = "failed"
+                                storage_obj.transcoding_error = f"API error: {response.status_code}"
                                 db_session.commit()
-                                logging.error(f"✅ Job ID saved to database")
                         finally:
                             db_session.close()
-                    else:
-                        logging.error(f"❌ Transcoding API error: {response.status_code} - {response.text}")
 
         except Exception as e:
             logging.error(f"❌ Failed to start transcoding: {e}")
