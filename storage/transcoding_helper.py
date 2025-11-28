@@ -159,9 +159,10 @@ class TranscodingHelper:
             storage_object_id: Storage object ID for reference
         """
         try:
-            # Create a background task using asyncio.create_task
+            # Get the running event loop and create a background task
             # This works correctly with uvicorn/gunicorn workers
-            asyncio.create_task(
+            loop = asyncio.get_running_loop()
+            loop.create_task(
                 TranscodingHelper.transcode_video(source_path, output_dir, storage_object_id)
             )
             logging.info(f"📤 Background transcoding queued for storage object {storage_object_id}")
