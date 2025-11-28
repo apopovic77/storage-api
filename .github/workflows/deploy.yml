@@ -160,6 +160,11 @@ jobs:
           envs: GH_TOKEN
           script: |
             set -euo pipefail
+            apt-get update -y
+            apt-get install -y ca-certificates python3-venv
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+            export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+            export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
             TARGET_DIR="/var/www/api-storage.arkturian.com"
 
