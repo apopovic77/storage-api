@@ -1778,12 +1778,14 @@ async def upload_file(
     api_key_header: Optional[str] = Security(_APIKeyHeader(name="X-API-KEY", auto_error=False)),
     tenant_id: Optional[str] = Depends(get_tenant_id),
 ):
-    data = await file.read()
-
-    # ENTRY POINT LOG - using gunicorn logger directly
+    # FIRST LINE LOG - before anything else
     import logging
     glogger = logging.getLogger("gunicorn.error")
-    glogger.error(f"🚀 UPLOAD_FILE CALLED: filename={file.filename}, size={len(data)}, context={context}")
+    glogger.error(f"🚀🚀🚀 UPLOAD_FILE ENTRY POINT: filename={file.filename}")
+
+    data = await file.read()
+
+    glogger.error(f"🚀 UPLOAD_FILE: after read, size={len(data)}, context={context}")
 
     try:
         # Special handling for HLS results: get tenant/owner from original video
