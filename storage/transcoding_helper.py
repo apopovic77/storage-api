@@ -256,7 +256,9 @@ class TranscodingHelper:
                                     storage_obj.transcoding_status = "completed"
                                     storage_obj.transcoding_progress = 100
                                     storage_obj.transcoding_error = None
-                                    storage_obj.hls_url = f"/uploads/storage/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
+                                    # Use VOD_BASE_URL for full URL
+                                    vod_base = settings.VOD_BASE_URL
+                                    storage_obj.hls_url = f"{vod_base}/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
 
                                     if not storage_obj.metadata_json:
                                         storage_obj.metadata_json = {}
