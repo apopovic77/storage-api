@@ -6,10 +6,10 @@ After=network.target
 Type=simple
 User=www-data
 Group=www-data
-WorkingDirectory=/var/www/storage-api
-Environment="PATH=/var/www/storage-api/venv/bin"
+WorkingDirectory=/var/www/api-storage.arkturian.com
+Environment="PATH=/var/www/api-storage.arkturian.com/venv/bin"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/var/www/storage-api/venv/bin/python -m uvicorn transcoding_api_server:app --host 0.0.0.0 --port 8087
+ExecStart=/var/www/api-storage.arkturian.com/venv/bin/uvicorn transcoding_api_server:app --host 0.0.0.0 --port 8082
 Restart=always
 RestartSec=10
 
