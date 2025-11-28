@@ -1780,10 +1780,9 @@ async def upload_file(
 ):
     data = await file.read()
 
-    # ENTRY POINT LOG - verify upload function is called
-    import logging
-    _entry_logger = logging.getLogger("upload_entry")
-    _entry_logger.error(f"🚀 UPLOAD_FILE CALLED: filename={file.filename}, size={len(data)}, context={context}")
+    # ENTRY POINT LOG - using print with flush to force immediate output
+    import sys
+    print(f"🚀 UPLOAD_FILE CALLED: filename={file.filename}, size={len(data)}, context={context}", file=sys.stderr, flush=True)
 
     try:
         # Special handling for HLS results: get tenant/owner from original video
@@ -2042,17 +2041,16 @@ async def upload_file(
         is_temp_hls = (saved_obj.context == "Temporary HLS ZIP for processing")
         is_mac_hls_result = (saved_obj.context == "Mac HLS Transcoding Result")
 
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"🔍 TRANSCODING CHECK: saved_obj.id={saved_obj.id}, context='{saved_obj.context}', mime_type='{saved_obj.mime_type}', is_temp_hls={is_temp_hls}, is_mac_hls_result={is_mac_hls_result}")
+        import sys
+        print(f"🔍 TRANSCODING CHECK: saved_obj.id={saved_obj.id}, context='{saved_obj.context}', mime_type='{saved_obj.mime_type}', is_temp_hls={is_temp_hls}, is_mac_hls_result={is_mac_hls_result}", file=sys.stderr, flush=True)
 
         if not is_temp_hls and not is_mac_hls_result:
-            logger.error(f"📤 TRIGGERING transcoding for storage object {saved_obj.id}")
+            print(f"📤 TRIGGERING transcoding for storage object {saved_obj.id}", file=sys.stderr, flush=True)
             from storage.service import enqueue_ai_safety_and_transcoding
             await enqueue_ai_safety_and_transcoding(saved_obj, db=db if 'db' in locals() else None, skip_ai_safety=skip_ai_safety)
-            logger.error(f"✅ enqueue_ai_safety_and_transcoding COMPLETED for {saved_obj.id}")
+            print(f"✅ enqueue_ai_safety_and_transcoding COMPLETED for {saved_obj.id}", file=sys.stderr, flush=True)
         else:
-            logger.error(f"📦 SKIPPING transcoding for HLS result/processing file: {saved_obj.id} (context: {saved_obj.context})")
+            print(f"📦 SKIPPING transcoding for HLS result/processing file: {saved_obj.id} (context: {saved_obj.context})", file=sys.stderr, flush=True)
         
 
     except Exception as e:
