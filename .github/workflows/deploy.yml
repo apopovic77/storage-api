@@ -120,6 +120,16 @@ jobs:
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
 
+            # Ensure mac-transcoding-api repository is available at /var/code
+            mkdir -p /var/code
+            if [ ! -d /var/code/mac-transcoding-api/.git ]; then
+              echo "Cloning mac-transcoding-api repository..."
+              git clone https://github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
+            else
+              echo "Updating mac-transcoding-api repository..."
+              cd /var/code/mac-transcoding-api && git pull origin main && cd -
+            fi
+
             # Replace transcoding package URL with local path for deployment
             sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@main|/var/code/mac-transcoding-api|g' requirements.txt
 
@@ -202,6 +212,16 @@ jobs:
             source venv/bin/activate
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
+
+            # Ensure mac-transcoding-api repository is available at /var/code
+            mkdir -p /var/code
+            if [ ! -d /var/code/mac-transcoding-api/.git ]; then
+              echo "Cloning mac-transcoding-api repository..."
+              git clone https://github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
+            else
+              echo "Updating mac-transcoding-api repository..."
+              cd /var/code/mac-transcoding-api && git pull origin main && cd -
+            fi
 
             # Replace transcoding package URL with local path for deployment
             sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@main|/var/code/mac-transcoding-api|g' requirements.txt
