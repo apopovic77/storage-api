@@ -69,14 +69,11 @@ jobs:
 
       - name: Deploy to Staging Server (arkserver)
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           port: ${{ secrets.DEPLOY_PORT }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: GH_TOKEN
           script: |
             set -euo pipefail
             apt-get update -y
@@ -123,10 +120,7 @@ jobs:
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
 
-            # Configure git to use GitHub PAT for private repos (for transcoding package)
-            export GIT_CONFIG_COUNT=1
-            export GIT_CONFIG_KEY_0="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
-            export GIT_CONFIG_VALUE_0="https://github.com/"
+            # Install dependencies (transcoding package is installed from local path)
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service
@@ -206,10 +200,7 @@ jobs:
             pip install --upgrade pip certifi
             rm -rf ~/.cache/pip
 
-            # Configure git to use GitHub PAT for private repos (for transcoding package)
-            export GIT_CONFIG_COUNT=1
-            export GIT_CONFIG_KEY_0="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
-            export GIT_CONFIG_VALUE_0="https://github.com/"
+            # Install dependencies (transcoding package is installed from local path)
             pip install --no-cache-dir -r requirements.txt
 
             systemctl restart storage-api.service

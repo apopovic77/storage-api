@@ -40,4 +40,5 @@ python-dotenv==1.0.0
 passlib[bcrypt]==1.7.4
 
 # Video Transcoding (with status polling for completion tracking)
-git+https://github.com/apopovic77/mac-transcoding-api.git@main
+# Installed from local path on server (repository pulled during deployment)
+/var/code/mac-transcoding-api
