@@ -151,22 +151,91 @@ class TranscodingHelper:
         storage_object_id: int
     ):
         """
-        Start transcoding in the background (fire and forget)
+        Start transcoding by sending request directly to transcoding-api
+
+        NOTE: We send the request synchronously (awaited) instead of using asyncio.create_task()
+        because background tasks created with create_task() get cancelled when the HTTP response
+        is sent in gunicorn/uvicorn workers. The transcoding-api handles the actual transcoding
+        asynchronously on its side.
 
         Args:
             source_path: Path to source video
             output_dir: Directory for transcoded files
             storage_object_id: Storage object ID for reference
         """
+        import httpx
+
         try:
-            # Create background task - function is now async so we can use create_task directly
-            logging.info(f"📤 Queueing background transcoding for storage object {storage_object_id}")
-            asyncio.create_task(
-                TranscodingHelper.transcode_video(source_path, output_dir, storage_object_id)
-            )
-            logging.info(f"✅ Background transcoding task created for storage object {storage_object_id}")
+            logging.error(f"📤 START: Sending transcoding request for storage object {storage_object_id}")
+            logging.error(f"   Source: {source_path}")
+            logging.error(f"   API URL: {settings.TRANSCODING_API_URL}")
+
+            # Check if transcoding is enabled
+            if not TRANSCODING_AVAILABLE:
+                logging.error("❌ Transcoding package not available")
+                return
+
+            if settings.TRANSCODING_MODE.lower() == "disabled":
+                logging.error("❌ Transcoding is disabled")
+                return
+
+            # Send POST request directly to transcoding-api
+            # The transcoding-api will queue the job and return immediately
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # First check if transcoding-api is available
+                try:
+                    health_response = await client.get(f"{settings.TRANSCODING_API_URL}/health")
+                    if health_response.status_code != 200:
+                        logging.error(f"❌ Transcoding API not healthy: {health_response.status_code}")
+                        return
+                    logging.error(f"✅ Transcoding API is healthy")
+                except Exception as health_err:
+                    logging.error(f"❌ Cannot reach transcoding API: {health_err}")
+                    return
+
+                # Upload the video file to transcoding-api
+                with open(source_path, "rb") as f:
+                    files = {"file": (source_path.name, f, "video/mp4")}
+                    headers = {}
+
+                    if settings.TRANSCODING_API_KEY:
+                        headers["X-API-Key"] = settings.TRANSCODING_API_KEY
+
+                    logging.error(f"📤 Uploading {source_path.name} to transcoding-api...")
+
+                    response = await client.post(
+                        f"{settings.TRANSCODING_API_URL}/transcode",
+                        files=files,
+                        headers=headers
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        job_id = result.get("job_id")
+                        logging.error(f"✅ Transcoding job queued successfully!")
+                        logging.error(f"   Job ID: {job_id}")
+                        logging.error(f"   Storage Object: {storage_object_id}")
+
+                        # Store job_id in database for status tracking
+                        from database import SessionLocal
+                        from models import StorageObject
+
+                        db_session = SessionLocal()
+                        try:
+                            storage_obj = db_session.get(StorageObject, storage_object_id)
+                            if storage_obj:
+                                if not storage_obj.metadata_json:
+                                    storage_obj.metadata_json = {}
+                                storage_obj.metadata_json['transcoding_job_id'] = job_id
+                                db_session.commit()
+                                logging.error(f"✅ Job ID saved to database")
+                        finally:
+                            db_session.close()
+                    else:
+                        logging.error(f"❌ Transcoding API error: {response.status_code} - {response.text}")
+
         except Exception as e:
-            logging.error(f"❌ Failed to queue background transcoding: {e}")
+            logging.error(f"❌ Failed to start transcoding: {e}")
             import traceback
             traceback.print_exc()
 
