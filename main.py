@@ -8,6 +8,22 @@ Handles:
 - Knowledge Graph (embeddings, similarity search)
 - Multi-Tenancy (tenant isolation)
 """
+
+# Configure logging FIRST - before any other imports
+import logging
+import sys
+
+# Configure root logger to output to stderr (captured by gunicorn error log)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stderr)]
+)
+
+# Also configure uvicorn loggers
+logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from storage import routes as storage_routes
