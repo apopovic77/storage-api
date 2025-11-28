@@ -145,7 +145,7 @@ class TranscodingHelper:
             return False
 
     @staticmethod
-    def start_background_transcoding(
+    async def start_background_transcoding(
         source_path: Path,
         output_dir: Path,
         storage_object_id: int
@@ -159,15 +159,16 @@ class TranscodingHelper:
             storage_object_id: Storage object ID for reference
         """
         try:
-            # Get the running event loop and create a background task
-            # This works correctly with uvicorn/gunicorn workers
-            loop = asyncio.get_running_loop()
-            loop.create_task(
+            # Create background task - function is now async so we can use create_task directly
+            logging.info(f"📤 Queueing background transcoding for storage object {storage_object_id}")
+            asyncio.create_task(
                 TranscodingHelper.transcode_video(source_path, output_dir, storage_object_id)
             )
-            logging.info(f"📤 Background transcoding queued for storage object {storage_object_id}")
+            logging.info(f"✅ Background transcoding task created for storage object {storage_object_id}")
         except Exception as e:
-            logging.error(f"Failed to queue background transcoding: {e}")
+            logging.error(f"❌ Failed to queue background transcoding: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # Convenience function for easy import
@@ -198,7 +199,7 @@ async def transcode_if_needed(
         output_dir = source_path.parent / basename
 
     # Start transcoding in background
-    TranscodingHelper.start_background_transcoding(
+    await TranscodingHelper.start_background_transcoding(
         source_path,
         output_dir,
         storage_object_id

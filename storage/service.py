@@ -1288,8 +1288,8 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         source_path = Path(file_path)
                         output_dir = source_path.parent / f"{source_path.stem}_transcoded"
 
-                        # Start background transcoding
-                        TranscodingHelper.start_background_transcoding(
+                        # Start background transcoding (await because it's now async)
+                        await TranscodingHelper.start_background_transcoding(
                             source_path,
                             output_dir,
                             storage_obj.id
