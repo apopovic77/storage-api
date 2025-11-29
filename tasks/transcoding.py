@@ -5,12 +5,12 @@ Celery tasks for video transcoding
 import logging
 from pathlib import Path
 from celery import Task
-from .base import BaseCeleryTask
+from .base import BaseStorageTask
 
 logger = logging.getLogger(__name__)
 
 
-class TranscodingTask(BaseCeleryTask):
+class TranscodingTask(BaseStorageTask):
     """Base class for transcoding tasks with DB session management"""
     pass
 
