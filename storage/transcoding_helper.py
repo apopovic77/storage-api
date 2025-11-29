@@ -187,24 +187,23 @@ class TranscodingHelper:
         storage_object_id: int
     ):
         """
-        Start transcoding by sending request directly to transcoding-api
+        Start transcoding - simplified synchronous ZIP mode
 
-        NOTE: We send the request synchronously (awaited) instead of using asyncio.create_task()
-        because background tasks created with create_task() get cancelled when the HTTP response
-        is sent in gunicorn/uvicorn workers. The transcoding-api handles the actual transcoding
-        asynchronously on its side.
+        Sends file to transcoding-api, receives ZIP with HLS files, extracts and updates DB.
 
         Args:
             source_path: Path to source video
-            output_dir: Directory for transcoded files
+            output_dir: Directory for transcoded files (will be created)
             storage_object_id: Storage object ID for reference
         """
         import httpx
+        import zipfile
+        import shutil
 
         try:
-            logging.error(f"📤 START: Sending transcoding request for storage object {storage_object_id}")
-            logging.error(f"   Source: {source_path}")
-            logging.error(f"   API URL: {settings.TRANSCODING_API_URL}")
+            logging.info(f"🎬 Starting transcoding for storage object {storage_object_id}")
+            logging.info(f"   Source: {source_path}")
+            logging.info(f"   Output: {output_dir}")
 
             # Check if transcoding is enabled
             if not TRANSCODING_AVAILABLE:
@@ -215,116 +214,65 @@ class TranscodingHelper:
                 logging.error("❌ Transcoding is disabled")
                 return
 
-            # Send POST request directly to transcoding-api
-            # The transcoding-api will queue the job and return immediately
-            # Long timeout since transcoding is now synchronous (can take several minutes)
+            # Upload to transcoding-api and receive ZIP
             async with httpx.AsyncClient(timeout=600.0) as client:
-                # First check if transcoding-api is available
-                try:
-                    health_response = await client.get(f"{settings.TRANSCODING_API_URL}/health")
-                    if health_response.status_code != 200:
-                        logging.error(f"❌ Transcoding API not healthy: {health_response.status_code}")
-                        return
-                    logging.error(f"✅ Transcoding API is healthy")
-                except Exception as health_err:
-                    logging.error(f"❌ Cannot reach transcoding API: {health_err}")
-                    return
-
-                # Upload the video file to transcoding-api
                 with open(source_path, "rb") as f:
                     files = {"file": (source_path.name, f, "video/mp4")}
-                    headers = {}
 
-                    if settings.TRANSCODING_API_KEY:
-                        headers["X-API-Key"] = settings.TRANSCODING_API_KEY
-
-                    logging.error(f"📤 Uploading {source_path.name} to transcoding-api...")
+                    logging.info(f"📤 Uploading to {settings.TRANSCODING_API_URL}/transcode-sync...")
 
                     response = await client.post(
-                        f"{settings.TRANSCODING_API_URL}/transcode",
-                        files=files,
-                        headers=headers
+                        f"{settings.TRANSCODING_API_URL}/transcode-sync",
+                        files=files
                     )
 
                     if response.status_code == 200:
-                        result = response.json()
-                        job_id = result.get("job_id")
-                        status = result.get("status")
-                        output_dir_str = result.get("output_dir")
-                        variants = result.get("variants", [])
-                        error = result.get("error")
+                        # Received ZIP file - extract it
+                        output_dir.mkdir(parents=True, exist_ok=True)
 
-                        logging.error(f"✅ Transcoding response received!")
-                        logging.error(f"   Job ID: {job_id}")
-                        logging.error(f"   Status: {status}")
-                        logging.error(f"   Output Dir: {output_dir_str}")
-                        logging.error(f"   Variants: {len(variants)}")
+                        zip_path = output_dir.parent / f"temp_{storage_object_id}.zip"
+                        with open(zip_path, "wb") as zf:
+                            zf.write(response.content)
 
+                        logging.info(f"📦 Received ZIP: {len(response.content)} bytes")
+
+                        # Extract ZIP
+                        with zipfile.ZipFile(zip_path, 'r') as zipf:
+                            zipf.extractall(output_dir)
+
+                        zip_path.unlink()  # Remove temp ZIP
+
+                        files_created = list(output_dir.glob("*"))
+                        logging.info(f"✅ Extracted {len(files_created)} files to {output_dir}")
+
+                        # Update database
                         from database import SessionLocal
                         from models import StorageObject
-                        import shutil
 
                         db_session = SessionLocal()
                         try:
                             storage_obj = db_session.get(StorageObject, storage_object_id)
                             if storage_obj:
-                                if status == "completed" and output_dir_str:
-                                    # Copy transcoded files to storage location
-                                    output_source = Path(output_dir_str)
+                                storage_obj.transcoding_status = "completed"
+                                storage_obj.transcoding_progress = 100
+                                storage_obj.transcoding_error = None
 
-                                    # Determine destination directory (next to original file)
-                                    tenant_id = storage_obj.metadata_json.get("tenant_id", "arkturian") if storage_obj.metadata_json else "arkturian"
-                                    base_key = storage_obj.object_key.rsplit(".", 1)[0]  # Remove extension
+                                # Set HLS URL
+                                tenant_id = storage_obj.metadata_json.get("tenant_id", "arkturian") if storage_obj.metadata_json else "arkturian"
+                                base_key = storage_obj.object_key.rsplit(".", 1)[0]
+                                vod_base = settings.VOD_BASE_URL
+                                storage_obj.hls_url = f"{vod_base}/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
 
-                                    hls_dest_dir = Path(settings.STORAGE_UPLOAD_DIR) / "media" / tenant_id / f"{base_key}_transcoded"
-                                    hls_dest_dir.mkdir(parents=True, exist_ok=True)
-
-                                    logging.error(f"📁 Copying HLS files from {output_source} to {hls_dest_dir}")
-
-                                    # Copy all HLS files
-                                    for item in output_source.iterdir():
-                                        dest_path = hls_dest_dir / item.name
-                                        if item.is_file():
-                                            shutil.copy2(item, dest_path)
-                                            logging.error(f"   Copied: {item.name}")
-
-                                    # Update database
-                                    storage_obj.transcoding_status = "completed"
-                                    storage_obj.transcoding_progress = 100
-                                    storage_obj.transcoding_error = None
-                                    # Use VOD_BASE_URL for full URL
-                                    vod_base = settings.VOD_BASE_URL
-                                    storage_obj.hls_url = f"{vod_base}/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
-
-                                    if not storage_obj.metadata_json:
-                                        storage_obj.metadata_json = {}
-                                    storage_obj.metadata_json['transcoding_job_id'] = job_id
-                                    storage_obj.metadata_json['transcoding_variants'] = variants
-
-                                    db_session.commit()
-                                    logging.error(f"✅ Database updated - transcoding completed!")
-                                    logging.error(f"   HLS URL: {storage_obj.hls_url}")
-
-                                    # Cleanup temp directory
-                                    try:
-                                        shutil.rmtree(output_source.parent)
-                                        logging.error(f"🧹 Cleaned up temp directory")
-                                    except Exception as cleanup_err:
-                                        logging.error(f"⚠️ Failed to cleanup temp dir: {cleanup_err}")
-
-                                elif status == "failed":
-                                    storage_obj.transcoding_status = "failed"
-                                    storage_obj.transcoding_error = error or "Transcoding failed"
-                                    db_session.commit()
-                                    logging.error(f"❌ Transcoding failed: {error}")
-                                else:
-                                    logging.error(f"⚠️ Unexpected status: {status}")
+                                db_session.commit()
+                                logging.info(f"✅ Transcoding completed!")
+                                logging.info(f"   HLS URL: {storage_obj.hls_url}")
                         finally:
                             db_session.close()
-                    else:
-                        logging.error(f"❌ Transcoding API error: {response.status_code} - {response.text}")
 
-                        # Update database with failure
+                    else:
+                        logging.error(f"❌ Transcoding failed: {response.status_code}")
+
+                        # Update DB with failure
                         from database import SessionLocal
                         from models import StorageObject
 
@@ -339,7 +287,7 @@ class TranscodingHelper:
                             db_session.close()
 
         except Exception as e:
-            logging.error(f"❌ Failed to start transcoding: {e}")
+            logging.error(f"❌ Transcoding error: {e}")
             import traceback
             traceback.print_exc()
 
