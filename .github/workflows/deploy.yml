@@ -129,13 +129,17 @@ jobs:
               echo "Cloning mac-transcoding-api repository..."
               # Configure git to use GH_TOKEN for private repos (if available)
               if [ -n "${GH_TOKEN:-}" ]; then
-                git clone https://x-access-token:${GH_TOKEN}@github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
+                git clone -b dev https://x-access-token:${GH_TOKEN}@github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
               else
-                git clone https://github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
+                git clone -b dev https://github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
               fi
             else
               echo "Updating mac-transcoding-api repository..."
-              cd /var/code/mac-transcoding-api && git pull origin main && cd -
+              cd /var/code/mac-transcoding-api
+              git fetch origin
+              git checkout dev
+              git reset --hard origin/dev
+              cd -
             fi
 
             # Replace transcoding package URL with local path for deployment
@@ -152,6 +156,7 @@ jobs:
             fi
 
             systemctl restart storage-api.service
+            systemctl restart celery-worker.service || true
             systemctl restart transcoding-api.service || true
             sleep 5
             systemctl status storage-api.service --no-pager
@@ -234,13 +239,17 @@ jobs:
               echo "Cloning mac-transcoding-api repository..."
               # Configure git to use GH_TOKEN for private repos (if available)
               if [ -n "${GH_TOKEN:-}" ]; then
-                git clone https://x-access-token:${GH_TOKEN}@github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
+                git clone -b dev https://x-access-token:${GH_TOKEN}@github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
               else
-                git clone https://github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
+                git clone -b dev https://github.com/apopovic77/mac-transcoding-api.git /var/code/mac-transcoding-api
               fi
             else
               echo "Updating mac-transcoding-api repository..."
-              cd /var/code/mac-transcoding-api && git pull origin main && cd -
+              cd /var/code/mac-transcoding-api
+              git fetch origin
+              git checkout dev
+              git reset --hard origin/dev
+              cd -
             fi
 
             # Replace transcoding package URL with local path for deployment
@@ -257,6 +266,7 @@ jobs:
             fi
 
             systemctl restart storage-api.service
+            systemctl restart celery-worker.service || true
             systemctl restart transcoding-api.service || true
             sleep 5
             systemctl status storage-api.service --no-pager
