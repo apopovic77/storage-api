@@ -92,16 +92,51 @@ class TranscodingHelper:
             # Update database with transcoding result
             from database import SessionLocal
             from models import StorageObject
+            import shutil
 
             db_session = SessionLocal()
             try:
                 storage_obj = db_session.get(StorageObject, storage_object_id)
                 if storage_obj:
                     if result.success:
-                        logging.info(f"✅ Transcoding completed for storage object {storage_object_id}")
-                        logging.info(f"   Created {len(result.variants)} variants")
-                        for variant in result.variants:
-                            logging.info(f"      - {variant.name}: {variant.resolution} @ {variant.bitrate_mbps:.1f} Mbps")
+                        # Handle response based on mode
+                        response_mode = result.metadata.get("response_mode", "zip")
+                        variant_count = 0
+
+                        if response_mode == "path":
+                            # Path mode: Files are in temp directory on same server, copy them
+                            source_output_dir = Path(result.metadata.get("output_dir", ""))
+                            variants_data = result.metadata.get("variants", [])
+                            variant_count = len(variants_data)
+
+                            if source_output_dir and source_output_dir.exists():
+                                logging.info(f"📁 Copying HLS files from {source_output_dir} to {output_dir}")
+
+                                # Copy all files from source to destination
+                                for item in source_output_dir.iterdir():
+                                    dest_path = output_dir / item.name
+                                    if item.is_file():
+                                        shutil.copy2(item, dest_path)
+                                        logging.info(f"   Copied: {item.name}")
+
+                                # Cleanup temp directory
+                                try:
+                                    shutil.rmtree(source_output_dir.parent)
+                                    logging.info(f"🧹 Cleaned up temp directory")
+                                except Exception as cleanup_err:
+                                    logging.warning(f"⚠️ Failed to cleanup temp dir: {cleanup_err}")
+
+                            logging.info(f"✅ Transcoding completed for storage object {storage_object_id}")
+                            logging.info(f"   Created {variant_count} variants (path mode)")
+                            for v in variants_data:
+                                logging.info(f"      - {v.get('name')}: {v.get('resolution')} @ {v.get('bitrate_mbps', 0):.1f} Mbps")
+                        else:
+                            # ZIP mode: Files already extracted to output_dir
+                            variant_count = len(result.variants)
+                            logging.info(f"✅ Transcoding completed for storage object {storage_object_id}")
+                            logging.info(f"   Created {variant_count} variants (zip mode)")
+                            for variant in result.variants:
+                                logging.info(f"      - {variant.name}: {variant.resolution} @ {variant.bitrate_mbps:.1f} Mbps")
 
                         if result.thumbnails:
                             logging.info(f"   Generated {len(result.thumbnails)} thumbnails")
