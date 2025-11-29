@@ -308,6 +308,32 @@ class TranscodingHelper:
             import traceback
             traceback.print_exc()
 
+    @staticmethod
+    def transcode_video_sync(source_path: Path, output_dir: Path, storage_object_id: int) -> bool:
+        """
+        Synchronous wrapper for transcode_video (for use in Celery tasks)
+
+        Args:
+            source_path: Path to source video
+            output_dir: Directory for transcoded files
+            storage_object_id: Storage object ID
+
+        Returns:
+            bool: True if transcoding succeeded
+        """
+        import asyncio
+
+        # Run async function in event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                TranscodingHelper.transcode_video(source_path, output_dir, storage_object_id)
+            )
+            return result
+        finally:
+            loop.close()
+
 
 # Convenience function for easy import
 async def transcode_if_needed(

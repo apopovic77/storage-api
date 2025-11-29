@@ -19,7 +19,7 @@ app = Celery(
     backend=f'redis://localhost:6379/1',
     include=[
         'tasks.ai_analysis',
-        # Future: 'tasks.transcoding',
+        'tasks.transcoding',
         # Future: 'tasks.notifications',
     ]
 )
@@ -60,6 +60,7 @@ app.conf.task_routes = {
     'tasks.ai_analysis.process_video_analysis': {'queue': 'ai_analysis'},
     'tasks.ai_analysis.process_text_analysis': {'queue': 'ai_analysis'},
     'tasks.ai_analysis.generate_embedding': {'queue': 'embeddings'},
+    'tasks.transcoding.process_video_transcoding': {'queue': 'transcoding'},
 }
 
 # Task Priority

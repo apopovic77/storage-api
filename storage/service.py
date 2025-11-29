@@ -1322,9 +1322,9 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
 
                     # Check if transcoding is enabled and should be done
                     if is_enabled and should_transcode:
-                        logger.error(f"✅ Transcoding enabled, starting background transcoding for storage object {storage_obj.id}")
+                        logger.error(f"✅ Transcoding enabled, queueing Celery task for storage object {storage_obj.id}")
 
-                        # Mark in database that transcoding is starting
+                        # Mark in database that transcoding is queued
                         from datetime import datetime, timezone
                         from database import SessionLocal
                         from models import StorageObject
@@ -1333,27 +1333,20 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         try:
                             storage_obj_refresh = db_session.get(StorageObject, storage_obj.id)
                             if storage_obj_refresh:
-                                storage_obj_refresh.transcoding_status = "processing"
+                                storage_obj_refresh.transcoding_status = "queued"
                                 if not storage_obj_refresh.metadata_json:
                                     storage_obj_refresh.metadata_json = {}
-                                storage_obj_refresh.metadata_json['transcoding_started_at'] = datetime.now(timezone.utc).isoformat()
+                                storage_obj_refresh.metadata_json['transcoding_queued_at'] = datetime.now(timezone.utc).isoformat()
                                 db_session.commit()
-                                print(f"✅ Database updated - transcoding status: processing")
+                                print(f"✅ Database updated - transcoding status: queued")
                         finally:
                             db_session.close()
 
-                        # Get output directory
-                        source_path = Path(file_path)
-                        output_dir = source_path.parent / f"{source_path.stem}_transcoded"
+                        # Queue Celery task for video transcoding
+                        from tasks.transcoding import process_video_transcoding
+                        process_video_transcoding.delay(storage_obj.id)
 
-                        # Start background transcoding (await because it's now async)
-                        await TranscodingHelper.start_background_transcoding(
-                            source_path,
-                            output_dir,
-                            storage_obj.id
-                        )
-
-                        print(f"✅ Background transcoding started for storage object {storage_obj.id}")
+                        print(f"✅ Transcoding task queued for storage object {storage_obj.id}")
                     else:
                         print(f"ℹ️  Transcoding disabled or not needed for this file type")
 
