@@ -834,6 +834,38 @@ Embedding Model: {ai_config.embedding_model}
     }
 
 
+async def _analyze_safety_only(
+    data: bytes,
+    mime_type: str,
+    filename: str
+) -> Dict[str, Any]:
+    """
+    Quick safety check only (Gemini Flash)
+
+    Fast safety analysis without full vision analysis.
+    Used by process_safety_check_only task.
+
+    Returns:
+        Dict with safety_info, category, danger_potential
+    """
+    # Prepare content
+    images_list = []
+    if mime_type.startswith("image/"):
+        encoded_image = base64.b64encode(data).decode("utf-8")
+        images_list.append(encoded_image)
+
+    context_info = f"Filename: {filename}"
+
+    # Run safety check
+    safety_result = await _run_safety_check(images_list, None, context_info)
+
+    return {
+        "category": safety_result.get("category", "unknown"),
+        "danger_potential": safety_result.get("danger_potential", 1),
+        "safety_info": safety_result.get("safety_info", {})
+    }
+
+
 async def _run_safety_check(
     images_list: list,
     text_content: Optional[str],

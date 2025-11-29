@@ -1759,10 +1759,11 @@ async def upload_file(
     owner_email: Optional[str] = Form(None),
     collection_id: Optional[str] = Form(None),
     link_id: Optional[str] = Form(None),  # For linking related files
-    analyze: bool = Form(True),  # Flag for AI analysis - DEFAULT TRUE for comprehensive analysis
+    analyze: bool = Form(True),  # Flag for AI analysis - DEFAULT TRUE for comprehensive analysis (LEGACY - use ai_mode)
+    ai_mode: str = Form("full"),  # AI analysis mode: "none", "safety", "vision", "full" (default)
     reference_id: Optional[str] = Form(None),  # For Mac transcoding - reference to existing storage object
     hls_result: bool = Form(False),  # Flag to indicate this ZIP contains HLS transcoding result
-    skip_ai_safety: bool = Form(False),  # Allow skipping AI safety check
+    skip_ai_safety: bool = Form(False),  # Allow skipping AI safety check (LEGACY - use ai_mode="none")
     storage_mode: str = Form("copy"),  # "copy" (default), "reference", or "external"
     reference_path: Optional[str] = Form(None),  # Filesystem path when using reference mode
     external_uri: Optional[str] = Form(None),  # External URL when using external mode
@@ -2055,8 +2056,21 @@ async def upload_file(
         if not is_temp_hls and not is_mac_hls_result:
             glogger.error(f"📤 TRIGGERING transcoding for storage object {saved_obj.id}")
             from storage.service import enqueue_ai_safety_and_transcoding
-            await enqueue_ai_safety_and_transcoding(saved_obj, db=db if 'db' in locals() else None, skip_ai_safety=skip_ai_safety)
-            glogger.error(f"✅ enqueue_ai_safety_and_transcoding COMPLETED for {saved_obj.id}")
+
+            # Convert legacy analyze/skip_ai_safety to ai_mode
+            effective_ai_mode = ai_mode
+            if not analyze:
+                effective_ai_mode = "none"
+            elif skip_ai_safety:
+                effective_ai_mode = "none"
+
+            await enqueue_ai_safety_and_transcoding(
+                saved_obj,
+                db=db if 'db' in locals() else None,
+                skip_ai_safety=skip_ai_safety,
+                ai_mode=effective_ai_mode
+            )
+            glogger.error(f"✅ enqueue_ai_safety_and_transcoding COMPLETED for {saved_obj.id} (ai_mode={effective_ai_mode})")
         else:
             glogger.error(f"📦 SKIPPING transcoding for HLS result/processing file: {saved_obj.id} (context: {saved_obj.context})")
         
@@ -3039,7 +3053,7 @@ def get_media_variant(
             apply_trim = default_trim_enabled
 
     # Default: if no hints provided, return original (full)
-    if not apply_trim and variant is None and display_for is None and not width and not height:
+    if not apply_trim and variant is None and display_for is None and not width and not height and not format:
         return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
 
     # Derive a deterministic webview name for medium/custom
@@ -3088,6 +3102,10 @@ def get_media_variant(
             max_edge = max(width or 0, height or 0) or max_edge
 
     if apply_trim and variant is None and display_for is None and not width and not height:
+        max_edge = None
+
+    # If only format is specified (no sizing hints), don't resize - only convert format
+    if variant is None and display_for is None and not width and not height and format:
         max_edge = None
 
     # Prepare destination path for derivative (in tenant subdirectory)

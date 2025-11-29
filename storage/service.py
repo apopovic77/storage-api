@@ -1061,7 +1061,7 @@ async def _process_tts_request_from_storage(storage_obj, tts_request):
         db_session.close()
 
 
-async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety: bool = False) -> None:
+async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety: bool = False, ai_mode: str = "full") -> None:
     """
     Centralized function to handle AI safety analysis and transcoding
     for all media types. Used by all upload endpoints.
@@ -1069,12 +1069,19 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
     Args:
         storage_obj: StorageObject instance with mime_type, id, and object_key
         db: SQLAlchemy session to use for database operations
+        skip_ai_safety: Legacy parameter, use ai_mode="none" instead
+        ai_mode: AI analysis mode (none, safety, vision, full)
     """
     import logging
     logger = logging.getLogger(__name__)
     logger.error(f"🔥 enqueue_ai_safety_and_transcoding CALLED for storage object {storage_obj.id}")
     logger.error(f"   mime_type: {storage_obj.mime_type}")
     logger.error(f"   skip_ai_safety: {skip_ai_safety}")
+    logger.error(f"   ai_mode: {ai_mode}")
+
+    # Convert legacy skip_ai_safety to ai_mode
+    if skip_ai_safety:
+        ai_mode = "none"
 
     try:
         import shutil
@@ -1141,7 +1148,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
 
         # === CELERY TASK QUEUE (v3 - Production Ready) ===
         # Replaced file-based queue with Redis + Celery
-        def _enqueue_ai_task(object_id: int, task_type: str, content_path: str, filename: str) -> None:
+        def _enqueue_ai_task(object_id: int, task_type: str, content_path: str, filename: str, ai_mode: str = "full") -> None:
             """
             Enqueue AI analysis task to Celery
 
@@ -1150,17 +1157,30 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                 task_type: Type of content (image, video, text, audio)
                 content_path: Path to content file or directory
                 filename: Original filename
+                ai_mode: AI analysis mode (none, safety, vision, full)
             """
             try:
                 from tasks.ai_analysis import (
+                    process_safety_check_only,
+                    process_vision_analysis_only,
                     process_image_analysis,
                     process_video_analysis,
                     process_text_analysis,
                 )
 
                 if task_type == "image":
-                    process_image_analysis.delay(object_id, content_path, filename)
-                    print(f"✅ Celery: Image analysis task queued for object {object_id}")
+                    # Route to appropriate task based on ai_mode
+                    if ai_mode == "safety":
+                        process_safety_check_only.delay(object_id, content_path, filename)
+                        print(f"✅ Celery: Safety check queued for object {object_id}")
+                    elif ai_mode == "vision":
+                        process_vision_analysis_only.delay(object_id, content_path, filename)
+                        print(f"✅ Celery: Vision analysis queued for object {object_id}")
+                    elif ai_mode == "full":
+                        process_image_analysis.delay(object_id, content_path, filename)
+                        print(f"✅ Celery: Full analysis queued for object {object_id}")
+                    else:
+                        print(f"⚠️  AI mode '{ai_mode}' = no analysis")
 
                 elif task_type == "video":
                     process_video_analysis.delay(object_id, content_path, filename)
@@ -1256,7 +1276,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                             print(f"!!! WARNING: Thumbnail extraction from pre-transcoded video failed, skipping AI analysis")
                         else:
                             print(f"--- SUCCESS: Thumbnails extracted from pre-transcoded video")
-                            _enqueue_ai_task(storage_obj.id, "video", str(ai_thumb_dir), storage_obj.original_filename)
+                            _enqueue_ai_task(storage_obj.id, "video", str(ai_thumb_dir), storage_obj.original_filename, ai_mode)
                 
                 # Delete the original ZIP file since we have extracted the content
                 try:
@@ -1274,7 +1294,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
             # Check if this is actually an audio-only WebM file
             if storage_obj.mime_type == "video/webm" and _is_audio_only_webm_helper(file_path):
                 # Process as audio instead of video
-                _enqueue_ai_task(storage_obj.id, "audio", str(file_path), storage_obj.original_filename)
+                _enqueue_ai_task(storage_obj.id, "audio", str(file_path), storage_obj.original_filename, ai_mode)
                 print(f"--- SUCCESS: Audio-only WebM queued for AI transcription: {file_path}")
             else:
                 # Regular video processing: optionally enqueue AI analysis, then handle transcoding
@@ -1285,7 +1305,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         print(f"!!! WARNING: ffmpeg thumbnail extraction failed with code {result_code} for {file_path}")
                     else:
                         print(f"--- SUCCESS: Thumbnail extraction complete for {file_path}")
-                        _enqueue_ai_task(storage_obj.id, "video", str(ai_thumb_dir), storage_obj.original_filename)
+                        _enqueue_ai_task(storage_obj.id, "video", str(ai_thumb_dir), storage_obj.original_filename, ai_mode)
 
                 # Trigger video transcoding using TranscodingHelper
                 file_size = file_path.stat().st_size
@@ -1369,13 +1389,13 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                     # Fallback to original file if resize fails
                     shutil.copy2(file_path, ai_image_dir / "image.jpg")
 
-                _enqueue_ai_task(storage_obj.id, "image", str(ai_image_dir), storage_obj.original_filename)
+                _enqueue_ai_task(storage_obj.id, "image", str(ai_image_dir), storage_obj.original_filename, ai_mode)
                 print(f"--- SUCCESS: Image queued for AI analysis: {file_path}")
             
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("audio/"):
             # Audio processing - queue for AI transcription and analysis
             if not skip_ai_safety:
-                _enqueue_ai_task(storage_obj.id, "audio", str(file_path), storage_obj.original_filename)
+                _enqueue_ai_task(storage_obj.id, "audio", str(file_path), storage_obj.original_filename, ai_mode)
                 print(f"--- SUCCESS: Audio queued for AI analysis: {file_path}")
             
         elif (storage_obj.mime_type and (storage_obj.mime_type.startswith("text/") or
@@ -1425,7 +1445,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         pass # Fall through to generic text analysis
 
                 # Generic text analysis (fallback or non-TTS text files)
-                _enqueue_ai_task(storage_obj.id, "text", str(file_path), storage_obj.original_filename)
+                _enqueue_ai_task(storage_obj.id, "text", str(file_path), storage_obj.original_filename, ai_mode)
                 print(f"--- SUCCESS: Text queued for AI analysis: {file_path}")
             
     except Exception as e:
