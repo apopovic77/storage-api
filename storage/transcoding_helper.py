@@ -114,11 +114,11 @@ class TranscodingHelper:
                         # Set HLS URL (master.m3u8 in output directory)
                         hls_master = output_dir / "master.m3u8"
                         if hls_master.exists():
-                            # Construct public URL for HLS master playlist
-                            # URL structure: /uploads/storage/media/{tenant}/{object_key}/master.m3u8
+                            # Construct public URL for HLS master playlist using VOD_BASE_URL
                             tenant_id = storage_obj.metadata_json.get("tenant_id", "arkturian") if storage_obj.metadata_json else "arkturian"
                             base_key = storage_obj.object_key.rsplit(".", 1)[0]  # Remove .mp4 extension
-                            storage_obj.hls_url = f"/uploads/storage/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
+                            vod_base = settings.VOD_BASE_URL
+                            storage_obj.hls_url = f"{vod_base}/media/{tenant_id}/{base_key}_transcoded/master.m3u8"
                             logging.info(f"   HLS URL set to: {storage_obj.hls_url}")
 
                         db_session.commit()
