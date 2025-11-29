@@ -100,6 +100,7 @@ class Settings:
     TRANSCODING_API_URL: Optional[str] = os.getenv("TRANSCODING_API_URL")
     TRANSCODING_API_KEY: Optional[str] = os.getenv("TRANSCODING_API_KEY")
     TRANSCODING_CALLBACK_URL: Optional[str] = os.getenv("TRANSCODING_CALLBACK_URL")  # Callback URL for transcoding status updates
+    TRANSCODING_RESPONSE_MODE: str = os.getenv("TRANSCODING_RESPONSE_MODE", "zip")  # "path" (local) or "zip" (remote)
 
     # CORS Settings
     CORS_ORIGINS: list = os.getenv(

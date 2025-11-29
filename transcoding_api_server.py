@@ -10,11 +10,13 @@ Run with: uvicorn transcoding_api_server:app --host 0.0.0.0 --port 8087
 import asyncio
 import logging
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi.responses import FileResponse
 
 # Configure logging at module level
 logging.basicConfig(
@@ -96,10 +98,19 @@ async def health():
 
 @app.post("/transcode")
 async def transcode(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    response_mode: str = Form(default="path")
 ):
     """
     Submit a transcoding job via file upload
+
+    Args:
+        file: Video file to transcode
+        response_mode: Response format - "path" (return paths) or "zip" (return ZIP file)
+
+    Response modes:
+        - path: Returns JSON with output_dir and variant paths (for local usage)
+        - zip: Returns ZIP file containing all transcoded files (for remote usage)
 
     NOTE: Job is processed synchronously (awaited) instead of using BackgroundTasks
     because background tasks get cancelled when HTTP response is sent in uvicorn workers.
@@ -145,15 +156,56 @@ async def transcode(
     # Process job synchronously (await completion)
     await process_job_from_file(job_id)
 
-    # Return final job status
-    return {
-        "job_id": job_id,
-        "status": jobs[job_id]["status"],
-        "message": jobs[job_id]["message"],
-        "error": jobs[job_id].get("error"),
-        "output_dir": jobs[job_id].get("output_dir"),
-        "variants": jobs[job_id].get("variants", [])
-    }
+    job_result = jobs[job_id]
+
+    # Check if transcoding failed
+    if job_result["status"] == "failed":
+        return {
+            "job_id": job_id,
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "error": job_result.get("error")
+        }
+
+    # Return based on response_mode
+    if response_mode == "zip":
+        # Create ZIP file with all transcoded files
+        output_dir = Path(job_result["output_dir"])
+        zip_path = temp_dir / f"{job_id}_transcoded.zip"
+
+        logging.info(f"📦 Creating ZIP archive: {zip_path}")
+
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Add all files from output directory
+            for file_path in output_dir.rglob('*'):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(output_dir)
+                    zipf.write(file_path, arcname)
+                    logging.info(f"   Added to ZIP: {arcname}")
+
+        logging.info(f"✅ ZIP created: {zip_path.stat().st_size} bytes")
+
+        # Return ZIP file
+        return FileResponse(
+            path=str(zip_path),
+            media_type="application/zip",
+            filename=f"{Path(file.filename).stem}_transcoded.zip",
+            headers={
+                "X-Job-ID": job_id,
+                "X-Transcoding-Status": job_result["status"],
+                "X-Variant-Count": str(len(job_result.get("variants", [])))
+            }
+        )
+    else:
+        # Return JSON with paths (default mode)
+        return {
+            "job_id": job_id,
+            "status": job_result["status"],
+            "message": job_result["message"],
+            "error": job_result.get("error"),
+            "output_dir": job_result.get("output_dir"),
+            "variants": job_result.get("variants", [])
+        }
 
 
 @app.get("/status/{job_id}")

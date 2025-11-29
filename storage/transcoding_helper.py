@@ -66,7 +66,8 @@ class TranscodingHelper:
             config = TranscodingConfig.from_env(
                 mode_str=settings.TRANSCODING_MODE,
                 remote_url=settings.TRANSCODING_API_URL,
-                remote_key=settings.TRANSCODING_API_KEY
+                remote_key=settings.TRANSCODING_API_KEY,
+                remote_response_mode=settings.TRANSCODING_RESPONSE_MODE
             )
 
             # Create transcoder
