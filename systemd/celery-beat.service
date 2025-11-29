@@ -1,0 +1,26 @@
+[Unit]
+Description=Celery Beat Scheduler for Storage API
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/www/api-storage.arkturian.com
+Environment="PATH=/var/www/api-storage.arkturian.com/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Celery beat command
+ExecStart=/var/www/api-storage.arkturian.com/venv/bin/celery -A celery_app beat \
+    --loglevel=info \
+    --pidfile=/var/run/celery/beat.pid \
+    --logfile=/var/log/celery/beat.log
+
+# Restart policy
+Restart=always
+RestartSec=10s
+
+# Process management
+PIDFile=/var/run/celery/beat.pid
+
+[Install]
+WantedBy=multi-user.target

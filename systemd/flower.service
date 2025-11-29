@@ -1,0 +1,24 @@
+[Unit]
+Description=Flower - Celery Monitoring UI
+After=network.target redis-server.service celery-worker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/www/api-storage.arkturian.com
+Environment="PATH=/var/www/api-storage.arkturian.com/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Flower command
+ExecStart=/var/www/api-storage.arkturian.com/venv/bin/celery -A celery_app flower \
+    --port=5555 \
+    --url_prefix=flower \
+    --persistent=True \
+    --db=/var/lib/storage-api/flower.db
+
+# Restart policy
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

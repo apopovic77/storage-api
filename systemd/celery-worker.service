@@ -1,0 +1,33 @@
+[Unit]
+Description=Celery Worker for Storage API
+After=network.target redis-server.service
+
+[Service]
+Type=forking
+User=root
+Group=root
+WorkingDirectory=/var/www/api-storage.arkturian.com
+Environment="PATH=/var/www/api-storage.arkturian.com/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Celery worker command
+ExecStart=/var/www/api-storage.arkturian.com/venv/bin/celery -A celery_app worker \
+    --loglevel=info \
+    --concurrency=4 \
+    --max-tasks-per-child=50 \
+    --pidfile=/var/run/celery/worker.pid \
+    --logfile=/var/log/celery/worker.log
+
+# Restart policy
+Restart=always
+RestartSec=10s
+
+# Process management
+PIDFile=/var/run/celery/worker.pid
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
