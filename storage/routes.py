@@ -2029,6 +2029,7 @@ async def upload_file(
                     external_uri=external_uri,
                     ai_context_metadata=ai_context_metadata if ai_context_metadata else None,
                     tenant_id=tenant_id,
+                    mime_type=file.content_type,
                 )
 
             # Attach tenant_id derived from API key for downstream KG processing

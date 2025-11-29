@@ -303,11 +303,12 @@ class GenericStorageService:
             "longitude": longitude,
         }
 
-    async def save(self, *, data: bytes, original_filename: str, owner_user_id: int, context: Optional[str] = None, tenant_id: str = "arkturian") -> dict:
+    async def save(self, *, data: bytes, original_filename: str, owner_user_id: int, context: Optional[str] = None, tenant_id: str = "arkturian", mime_type: Optional[str] = None) -> dict:
         if len(data) > settings.MAX_FILE_SIZE:
             raise ValueError("File too large")
-        
-        mime = self._detect_mime_type(data, original_filename)
+
+        # Use provided mime_type if available, otherwise auto-detect
+        mime = mime_type if mime_type else self._detect_mime_type(data, original_filename)
         filename = self._create_filename(original_filename, owner_user_id, context)
         tenant_media_dir = self._get_tenant_dir(self.media_dir, tenant_id)
         file_path = tenant_media_dir / filename

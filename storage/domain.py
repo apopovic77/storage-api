@@ -24,6 +24,7 @@ async def save_file_and_record(
     external_uri: Optional[str] = None,
     ai_context_metadata: Optional[dict] = None,
     tenant_id: Optional[str] = None,
+    mime_type: Optional[str] = None,
 ) -> StorageObject:
     """Save file via GenericStorageService and create a StorageObject row.
 
@@ -92,6 +93,7 @@ async def save_file_and_record(
             owner_user_id=owner_user_id,
             context=context,
             tenant_id=tenant_id or "arkturian",
+            mime_type=mime_type,
         )
 
     # Build metadata_json with thumbnail/webview filenames (URLs are built dynamically)
