@@ -139,7 +139,7 @@ jobs:
             fi
 
             # Replace transcoding package URL with local path for deployment
-            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@main|/var/code/mac-transcoding-api|g' requirements.txt
+            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@[a-z]*|/var/code/mac-transcoding-api|g' requirements.txt
 
             # Install dependencies (transcoding package now uses local path)
             pip install --no-cache-dir -r requirements.txt
@@ -244,7 +244,7 @@ jobs:
             fi
 
             # Replace transcoding package URL with local path for deployment
-            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@main|/var/code/mac-transcoding-api|g' requirements.txt
+            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@[a-z]*|/var/code/mac-transcoding-api|g' requirements.txt
 
             # Install dependencies (transcoding package now uses local path)
             pip install --no-cache-dir -r requirements.txt
