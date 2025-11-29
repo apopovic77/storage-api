@@ -1760,7 +1760,7 @@ async def upload_file(
     collection_id: Optional[str] = Form(None),
     link_id: Optional[str] = Form(None),  # For linking related files
     analyze: bool = Form(True),  # Flag for AI analysis - DEFAULT TRUE for comprehensive analysis (LEGACY - use ai_mode)
-    ai_mode: str = Form("full"),  # AI analysis mode: "none", "safety", "vision", "full" (default)
+    ai_mode: str = Form("safety"),  # AI analysis mode: "none", "safety" (default), "vision", "full"
     reference_id: Optional[str] = Form(None),  # For Mac transcoding - reference to existing storage object
     hls_result: bool = Form(False),  # Flag to indicate this ZIP contains HLS transcoding result
     skip_ai_safety: bool = Form(False),  # Allow skipping AI safety check (LEGACY - use ai_mode="none")
