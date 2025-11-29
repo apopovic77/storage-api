@@ -40,6 +40,10 @@ python-dotenv==1.0.0
 # Authentication
 passlib[bcrypt]==1.7.4
 
+# Task Queue
+celery==5.5.3
+redis==7.1.0
+
 # Video Transcoding (with status polling for completion tracking)
 # Using dev branch for remote_response_mode support
 git+https://github.com/apopovic77/mac-transcoding-api.git@dev
