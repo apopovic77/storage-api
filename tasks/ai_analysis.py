@@ -10,14 +10,14 @@ Handles:
 Migrated from scripts/ai_worker.py to Celery for production reliability.
 """
 
+# Fix ChromaDB SQLite issue - MUST BE FIRST!
 import sys
+sys.modules['sqlite3'] = __import__('pysqlite3')
+
 import base64
 from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
-
-# Fix ChromaDB SQLite issue
-sys.modules['sqlite3'] = __import__('pysqlite3')
 
 from celery_app import app
 from tasks.base import BaseStorageTask
