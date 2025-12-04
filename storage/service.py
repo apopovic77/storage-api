@@ -1084,6 +1084,25 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
     if skip_ai_safety:
         ai_mode = "none"
 
+    # Skip AI analysis for 3D model files (binary formats that can't be analyzed by vision AI)
+    is_3d_model = False
+    if storage_obj.mime_type:
+        # Check MIME type
+        if storage_obj.mime_type.startswith("model/") or \
+           storage_obj.mime_type in ("application/octet-stream", "application/x-3ds"):
+            is_3d_model = True
+
+    # Also check file extension as fallback (some servers don't set correct MIME for 3D files)
+    if storage_obj.original_filename:
+        filename_lower = storage_obj.original_filename.lower()
+        if filename_lower.endswith(('.glb', '.gltf', '.obj', '.fbx', '.dae', '.3ds', '.stl', '.blend', '.usdz')):
+            is_3d_model = True
+
+    if is_3d_model:
+        logger.error(f"⏭️  Skipping AI analysis for 3D model file: {storage_obj.original_filename} (mime: {storage_obj.mime_type})")
+        print(f"⏭️  3D model detected - skipping AI analysis for {storage_obj.original_filename}")
+        return
+
     try:
         import shutil
         import httpx
