@@ -3451,6 +3451,7 @@ def get_object_metadata(
         base_url=base_url,
         storage_mode=obj.storage_mode,
         stored_file_url=obj.file_url if obj.file_url else None,
+        mime_type=obj.mime_type,
     )
     response_obj.file_url = urls["file_url"]
     response_obj.thumbnail_url = urls["thumbnail_url"]
@@ -3558,6 +3559,7 @@ def list_objects(
             base_url=base_url,
             storage_mode=storage_obj.storage_mode,
             stored_file_url=storage_obj.file_url if storage_obj.file_url else None,
+            mime_type=storage_obj.mime_type,
         )
         response_obj.file_url = urls["file_url"]
         response_obj.thumbnail_url = urls["thumbnail_url"]

@@ -20,6 +20,7 @@ def build_storage_urls(
     base_url: Optional[str] = None,
     storage_mode: str = "copy",
     stored_file_url: Optional[str] = None,
+    mime_type: Optional[str] = None,
 ) -> dict:
     """
     Build URLs dynamically for a storage object.
@@ -32,6 +33,7 @@ def build_storage_urls(
         base_url: Base URL of the API (e.g., "https://api-storage.arkturian.com")
         storage_mode: Storage mode (copy, reference, external)
         stored_file_url: For external mode, use the stored proxy URL
+        mime_type: MIME type of the file (e.g., "video/mp4") - used to add format=jpg for videos
 
     Returns:
         Dict with file_url, thumbnail_url, webview_url
@@ -53,7 +55,11 @@ def build_storage_urls(
 
     # Thumbnail URL - ALWAYS generated on-demand via media endpoint
     # No longer checking for metadata_json.thumbnail_filename - all variants are dynamic
+    # For videos, add format=jpg to extract a frame instead of returning the video
+    is_video = mime_type and mime_type.lower().startswith("video/")
     thumbnail_url = f"{base_url}/storage/media/{object_id}?variant=thumbnail"
+    if is_video:
+        thumbnail_url = f"{thumbnail_url}&format=jpg"
     if checksum:
         thumbnail_url = f"{thumbnail_url}&v={checksum}"
 
