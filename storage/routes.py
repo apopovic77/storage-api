@@ -2851,6 +2851,21 @@ def get_media_variant(
         )
 
         if should_extract_frame:
+            # Determine cache path for video frame derivative
+            target_format = format.lower() if format else "jpg"
+            target_width = width or (320 if variant == "thumbnail" else 1920)
+            q = quality or 85
+            suffix = "jpg" if target_format in ["jpg", "jpeg"] else target_format
+
+            # Build cache filename: vidframe_{object_id}_{width}_q{quality}.{format}
+            cache_name = f"vidframe_{object_id}_{target_width}_q{q}.{suffix}"
+            cache_path = generic_storage.webview_dir / (obj.tenant_id or "arkturian") / cache_name
+
+            # Check if cached frame exists (skip ffmpeg if so)
+            if cache_path.exists() and not refresh:
+                media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+                return FileResponse(cache_path, media_type=media_type_map.get(suffix, "image/jpeg"), headers={"Content-Disposition": "inline"})
+
             try:
                 # Extract frame from middle of video
                 import subprocess
@@ -2864,52 +2879,34 @@ def get_media_variant(
                 duration = float(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip() else 0
                 timestamp = max(duration / 2, 0)  # Middle of video
 
-                # Extract frame using ffmpeg
+                # Extract frame using ffmpeg - output directly to JPEG for speed
                 ffmpeg_cmd = [
-                    "ffmpeg", "-ss", str(timestamp), "-i", str(src_path),
-                    "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"
+                    "ffmpeg", "-y", "-ss", str(timestamp), "-i", str(src_path),
+                    "-vframes", "1", "-q:v", "2", str(cache_path)
                 ]
-                frame_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=30)
+                # Ensure cache directory exists
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                frame_result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=60)
 
-                if frame_result.returncode == 0 and frame_result.stdout:
-                    # Load image from ffmpeg output
-                    img = Image.open(BytesIO(frame_result.stdout))
+                if frame_result.returncode == 0 and cache_path.exists():
+                    # Resize if needed
+                    img = Image.open(cache_path)
+                    w, h = img.size
 
-                    # Apply width/height if specified (or default thumbnail size)
-                    if variant == "thumbnail" and not width and not height:
-                        # Default thumbnail size
-                        width = 320
+                    if target_width and w > target_width:
+                        new_h = int(h * (target_width / w))
+                        img = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
 
-                    if width or height:
-                        w, h = img.size
-                        if width and height:
-                            img = img.resize((width, height), Image.Resampling.LANCZOS)
-                        elif width:
-                            new_h = int(h * (width / w))
-                            img = img.resize((width, new_h), Image.Resampling.LANCZOS)
-                        elif height:
-                            new_w = int(w * (height / h))
-                            img = img.resize((new_w, height), Image.Resampling.LANCZOS)
-
-                    # Convert to requested format (default to JPEG for thumbnails)
-                    buffer = BytesIO()
-                    target_format = format.lower() if format else "jpg"
-                    save_format = "JPEG" if target_format in ["jpg", "jpeg"] else target_format.upper()
-
+                    # Save with requested format/quality
+                    save_format = "JPEG" if suffix in ["jpg", "jpeg"] else suffix.upper()
                     if save_format == "JPEG" and img.mode in {"RGBA", "LA", "P"}:
                         img = img.convert("RGB")
 
-                    save_kwargs = {}
-                    if save_format == "JPEG":
-                        save_kwargs = {"quality": quality or 90, "optimize": True}
-                    elif save_format == "WEBP":
-                        save_kwargs = {"quality": quality or 90, "method": 6}
-
-                    img.save(buffer, format=save_format, **save_kwargs)
-                    buffer.seek(0)
+                    save_kwargs = {"quality": q, "optimize": True} if save_format == "JPEG" else {"quality": q}
+                    img.save(cache_path, format=save_format, **save_kwargs)
 
                     media_type_map = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
-                    return Response(content=buffer.getvalue(), media_type=media_type_map.get(save_format, "image/png"))
+                    return FileResponse(cache_path, media_type=media_type_map.get(save_format, "image/jpeg"), headers={"Content-Disposition": "inline"})
             except Exception as e:
                 print(f"⚠️ Failed to extract video frame for object {object_id}: {e}")
                 # Fall through to return original video
