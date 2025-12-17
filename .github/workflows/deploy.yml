@@ -226,9 +226,10 @@ jobs:
       - name: Deploy via arkturian.com jump host
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: arkturian.com
-          username: root
-          key: ${{ secrets.ARKTURIAN_SSH_KEY }}
+          host: ${{ secrets.PROD_DEPLOY_HOST }}
+          port: ${{ secrets.PROD_DEPLOY_PORT }}
+          username: ${{ secrets.PROD_DEPLOY_USER }}
+          key: ${{ secrets.PROD_DEPLOY_SSH_KEY }}
           command_timeout: 10m
           script: |
             set -euo pipefail
@@ -256,11 +257,12 @@ jobs:
               cd /var/code/mac-transcoding-api && git fetch origin && git reset --hard origin/dev && cd -
             fi
 
-            # Use simplified requirements for Python 3.13
+            # Install dependencies (Python 3.13 compatible)
             pip install --no-cache-dir -r requirements.txt
 
-            echo "=== Restarting service ==="
+            echo "=== Restarting services ==="
             sudo systemctl restart storage-api.service
+            sudo systemctl restart celery-worker.service || true
             sleep 3
 
             echo "=== Health check ==="
