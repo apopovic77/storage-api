@@ -245,7 +245,9 @@ jobs:
             echo "=== Updating repository ==="
             cd "$TARGET_DIR"
             git fetch origin
-            git checkout main
+            # Clean untracked files but keep venv and .env
+            git clean -fd --exclude=venv --exclude=.env
+            git checkout -f main
             git reset --hard origin/main
 
             echo "=== Installing dependencies ==="
@@ -256,6 +258,9 @@ jobs:
             if [ -d /var/code/mac-transcoding-api ]; then
               cd /var/code/mac-transcoding-api && git fetch origin && git reset --hard origin/dev && cd -
             fi
+
+            # Convert git URL to local path for mac-transcoding-api
+            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@dev|/var/code/mac-transcoding-api|g' requirements.txt
 
             # Install dependencies (Python 3.13 compatible)
             pip install --no-cache-dir -r requirements.txt
