@@ -45,5 +45,5 @@ passlib[bcrypt]>=1.7.4
 celery>=5.4.0
 redis>=5.0.0
 
-# Transcoding (local path)
-/var/code/mac-transcoding-api
+# Transcoding (deployment scripts convert this to local path)
+git+https://github.com/apopovic77/mac-transcoding-api.git@dev
