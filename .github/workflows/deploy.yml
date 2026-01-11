@@ -201,6 +201,11 @@ jobs:
 
             pip install --no-cache-dir -r requirements.txt
 
+            # Fix chroma_db permissions - both www-data (storage-api) and root (celery) need access
+            mkdir -p "$TARGET_DIR/chroma_db"
+            chown -R www-data:www-data "$TARGET_DIR/chroma_db"
+            chmod -R 775 "$TARGET_DIR/chroma_db"
+
             systemctl restart storage-api.service
             systemctl restart celery-worker.service || true
             sleep 3
