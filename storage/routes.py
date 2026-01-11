@@ -1848,7 +1848,9 @@ async def upload_file(
                     StorageObject.tenant_id == tenant_id
                 )
                 if link_id:
-                    q = q.filter(StorageObject.link_id == link_id)
+                    # Support semicolon-separated link_ids
+                    pattern = func.concat(';', StorageObject.link_id, ';')
+                    q = q.filter(pattern.like(f'%;{link_id};%'))
                 q = q.filter(StorageObject.mime_type.isnot(None)).filter(StorageObject.mime_type.like("video/%"))
                 candidate = q.order_by(StorageObject.created_at.desc()).first()
                 if candidate:
@@ -2059,10 +2061,16 @@ async def upload_file(
             from storage.service import enqueue_ai_safety_and_transcoding
 
             # Convert legacy analyze/skip_ai_safety to ai_mode
+            # Priority: explicit ai_mode > skip_ai_safety > analyze
             effective_ai_mode = ai_mode
-            if not analyze:
+            if ai_mode == "none":
+                # Explicit none - respect it
+                pass
+            elif not analyze:
+                # Legacy: analyze=False means no AI
                 effective_ai_mode = "none"
-            elif skip_ai_safety:
+            elif skip_ai_safety and ai_mode not in ("safety", "vision", "full"):
+                # Only apply skip_ai_safety if ai_mode wasn't explicitly set
                 effective_ai_mode = "none"
 
             await enqueue_ai_safety_and_transcoding(
@@ -2453,7 +2461,9 @@ def get_asset_variant_references(
     if object_id is not None:
         q = q.filter(StorageObject.id == object_id)
     elif link_id:
-        q = q.filter(StorageObject.link_id == link_id)
+        # Support semicolon-separated link_ids: "101554;101563"
+        pattern = func.concat(';', StorageObject.link_id, ';')
+        q = q.filter(pattern.like(f'%;{link_id};%'))
     elif collection_id:
         q = q.filter(StorageObject.collection_id == collection_id)
     elif not mine and current_user.trust_level == "admin":
@@ -3509,8 +3519,12 @@ def list_objects(
     q = q.filter(StorageObject.tenant_id == tenant_id)
     
     # Prioritize link_id to fetch all related items regardless of owner
+    # Supports multiple link_ids separated by semicolon: "101554;101563"
+    # Query for "101554" will match both "101554" and "101554;101563"
     if link_id:
-        q = q.filter(StorageObject.link_id == link_id)
+        # Pattern: ';{search};' in ';{stored_value};' ensures exact key match
+        pattern = func.concat(';', StorageObject.link_id, ';')
+        q = q.filter(pattern.like(f'%;{link_id};%'))
     elif collection_id:
         q = q.filter(StorageObject.collection_id == collection_id)
     elif collection_like:
