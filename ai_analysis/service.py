@@ -28,9 +28,52 @@ INTERNAL_API_KEY = os.getenv("AI_INTERNAL_API_KEY", "Inetpass1")
 # Make AI API base configurable to avoid hardcoding wrong ports on prod
 API_BASE_URL = os.getenv("AI_API_BASE_URL", "http://127.0.0.1:8000")
 
+# Model configuration for different tasks
+SAFETY_MODEL = os.getenv("SAFETY_MODEL", "haiku")  # Fast model for safety checks
+ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "sonnet")  # Pro model for full analysis
+
 # CSV Chunking configuration
 CSV_CHUNK_SIZE = 10  # Process 10 rows per chunk (small for testing/debugging)
 CSV_MAX_ROWS_BEFORE_CHUNKING = 50  # Chunk if CSV has more than 50 rows
+
+
+async def _call_claude_with_images(
+    prompt: str,
+    image_paths: List[str],
+    model: str = None,
+    timeout: float = 120.0
+) -> str:
+    """
+    Call Claude API with local image paths.
+
+    Claude CLI can read local files directly - we pass paths in the prompt
+    and it will load them.
+
+    Args:
+        prompt: The text prompt
+        image_paths: List of local file paths to images
+        model: Model to use (haiku, sonnet, opus)
+        timeout: Request timeout in seconds
+
+    Returns:
+        AI response text (raw, may need JSON parsing)
+    """
+    model = model or ANALYSIS_MODEL
+
+    # Build payload with image_paths (Claude CLI reads them directly)
+    payload = {
+        "prompt": prompt,
+        "image_paths": image_paths
+    }
+
+    # Add model as query parameter
+    headers = {"X-API-KEY": INTERNAL_API_KEY, "Content-Type": "application/json"}
+    url = f"{API_BASE_URL}/ai/claude?model={model}"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json().get("message", "")
 
 
 def extract_excel_as_text(data: bytes, mime_type: str) -> str:
@@ -912,6 +955,143 @@ async def _run_safety_check(
         except Exception as e:
             print(f"Safety check failed: {e}")
             return _error_response(f"Safety check failed: {e}")
+
+
+async def _run_safety_check_with_paths(
+    image_paths: List[str],
+    text_content: Optional[str],
+    context_info: str
+) -> Dict[str, Any]:
+    """
+    Run safety check using Claude with local image paths.
+
+    Uses haiku model for fast, cheap safety checks.
+
+    Args:
+        image_paths: List of local file paths to images
+        text_content: Optional text content to analyze
+        context_info: Context information for the prompt
+
+    Returns:
+        Safety check results dictionary
+    """
+    prompt = SAFETY_PROMPT.format(context_info=context_info)
+    if text_content:
+        prompt += f"\n\n--- CONTENT ---\n{text_content}"
+
+    try:
+        print(f"🛡️ Running safety check with Claude ({SAFETY_MODEL}) on {len(image_paths)} images")
+        ai_response_str = await _call_claude_with_images(
+            prompt=prompt,
+            image_paths=image_paths,
+            model=SAFETY_MODEL,
+            timeout=60.0
+        )
+
+        ai_response_str = _clean_json_response(ai_response_str)
+        result = json.loads(ai_response_str)
+
+        safety_check = result.get("safetyCheck", {})
+        classification = result.get("classification", {})
+
+        return {
+            "category": classification.get("category", "unknown"),
+            "danger_potential": classification.get("dangerPotential", 1),
+            "safety_info": {
+                "isSafe": safety_check.get("isSafe", True),
+                "confidence": safety_check.get("confidence", 1.0),
+                "reasoning": safety_check.get("reasoning", ""),
+                "flags": safety_check.get("flags", [])
+            },
+            "prompt": prompt,
+            "ai_response": ai_response_str
+        }
+    except Exception as e:
+        print(f"Safety check with Claude failed: {e}")
+        return _error_response(f"Safety check failed: {e}")
+
+
+async def _run_vision_analysis_with_paths(
+    image_paths: List[str],
+    context_info: str,
+    vision_mode: str = "generic"
+) -> Dict[str, Any]:
+    """
+    Run comprehensive vision analysis using Claude with local image paths.
+
+    Uses sonnet model for high-quality analysis.
+
+    Args:
+        image_paths: List of local file paths to images
+        context_info: Context information for the prompt
+        vision_mode: Vision analysis mode (generic, product, etc.)
+
+    Returns:
+        Comprehensive vision analysis results
+    """
+    prompt = VISION_ANALYSIS_PROMPT.format(context_info=context_info)
+
+    try:
+        print(f"🎨 Running vision analysis with Claude ({ANALYSIS_MODEL}) on {len(image_paths)} images")
+        ai_response_str = await _call_claude_with_images(
+            prompt=prompt,
+            image_paths=image_paths,
+            model=ANALYSIS_MODEL,
+            timeout=120.0
+        )
+
+        ai_response_str = _clean_json_response(ai_response_str)
+        result = json.loads(ai_response_str)
+
+        # Extract all components
+        safety_check = result.get("safetyCheck", {})
+        classification = result.get("classification", {})
+        product_analysis = result.get("productAnalysis", {})
+        visual_analysis = result.get("visualAnalysis", {})
+        layout_intelligence = result.get("layoutIntelligence", {})
+        semantic_props = result.get("semanticProperties", {})
+        tech_metadata = result.get("technicalMetadata", {})
+        media_analysis = result.get("mediaAnalysis", {})
+        embedding_info = result.get("embeddingInfo", {})
+
+        # Build comprehensive result
+        return {
+            "safety_info": {
+                "isSafe": safety_check.get("isSafe", True),
+                "confidence": safety_check.get("confidence", 1.0),
+                "reasoning": safety_check.get("reasoning", ""),
+                "flags": safety_check.get("flags", [])
+            },
+            "category": classification.get("category", "unknown"),
+            "danger_potential": classification.get("dangerPotential", 1),
+            "ai_title": media_analysis.get("suggestedTitle"),
+            "ai_subtitle": media_analysis.get("suggestedSubtitle"),
+            "ai_tags": media_analysis.get("tags", []),
+            "extracted_tags": {
+                "keywords": semantic_props.get("keywords", []),
+                "colors": product_analysis.get("colors", []),
+                "materials": product_analysis.get("materials", []),
+                "dominant_objects": visual_analysis.get("dominantObjects", [])
+            },
+            "embedding_info": {
+                **embedding_info,
+                "metadata": {
+                    "product_analysis": product_analysis,
+                    "visual_analysis": visual_analysis,
+                    "layout_intelligence": layout_intelligence,
+                    "semantic_properties": semantic_props,
+                    "technical_metadata": tech_metadata,
+                    "is_product": classification.get("isProduct", False),
+                    "vision_mode": vision_mode
+                }
+            },
+            "ai_response": ai_response_str
+        }
+    except Exception as e:
+        print(f"Vision analysis with Claude failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return _error_response(f"Vision analysis failed: {e}")
 
 
 async def _run_embedding_generation(

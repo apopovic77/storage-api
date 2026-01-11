@@ -54,16 +54,13 @@ def process_safety_check_only(object_id: int, image_path: str, filename: str) ->
         if not img_path.exists():
             raise FileNotFoundError(f"Expected image.jpg in {image_path}")
 
-    # Read image data
-    with open(img_path, "rb") as f:
-        image_data = f.read()
-
-    # Safety Check only (fast with Gemini Flash)
-    from ai_analysis.service import _analyze_safety_only
-    result = asyncio.run(_analyze_safety_only(
-        data=image_data,
-        mime_type="image/jpeg",
-        filename=filename
+    # Safety Check using Claude with image paths (fast with haiku model)
+    from ai_analysis.service import _run_safety_check_with_paths
+    context_info = f"Filename: {filename}"
+    result = asyncio.run(_run_safety_check_with_paths(
+        image_paths=[str(img_path)],
+        text_content=None,
+        context_info=context_info
     ))
 
     logger.info(f"   🛡️ Safety check complete:")
@@ -121,27 +118,19 @@ def process_vision_analysis_only(object_id: int, image_path: str, filename: str)
         if not img_path.exists():
             raise FileNotFoundError(f"Expected image.jpg in {image_path}")
 
-    # Read image data
-    with open(img_path, "rb") as f:
-        image_data = f.read()
+    # Full Vision Analysis using Claude with image paths (sonnet model)
+    from ai_analysis.service import _run_vision_analysis_with_paths
+    context_info = f"Filename: {filename}\nMedia type: image"
 
-    # Full Vision Analysis
-    from ai_analysis.service import analyze_content
-    context = {
-        "filename": filename,
-        "media_type": "image"
-    }
-
-    result = asyncio.run(analyze_content(
-        data=image_data,
-        mime_type="image/jpeg",
-        context=context,
-        object_id=object_id
+    result = asyncio.run(_run_vision_analysis_with_paths(
+        image_paths=[str(img_path)],
+        context_info=context_info,
+        vision_mode="generic"
     ))
 
     logger.info(f"   🎨 Vision analysis complete:")
     logger.info(f"      Safety: {result.get('safety_info', {}).get('isSafe', 'unknown')}")
-    logger.info(f"      Category: {result.get('ai_category', 'unknown')}")
+    logger.info(f"      Category: {result.get('category', 'unknown')}")
     logger.info(f"      Tags: {len(result.get('ai_tags', []))} extracted")
 
     # Update database with all vision data (NO EMBEDDING)
@@ -152,14 +141,14 @@ def process_vision_analysis_only(object_id: int, image_path: str, filename: str)
     if not storage_obj:
         raise Exception(f"Storage object {object_id} not found in database")
 
-    # Update all AI fields
+    # Update all AI fields (using new result format from Claude-based analysis)
     storage_obj.ai_safety_rating = "safe" if result.get("safety_info", {}).get("isSafe") else "unsafe"
-    storage_obj.ai_category = result.get("ai_category")
-    storage_obj.ai_danger_potential = result.get("ai_danger_potential")
+    storage_obj.ai_category = result.get("category")
+    storage_obj.ai_danger_potential = result.get("danger_potential")
     storage_obj.ai_title = result.get("ai_title")
     storage_obj.ai_subtitle = result.get("ai_subtitle")
-    storage_obj.ai_tags = result.get("ai_tags")
-    storage_obj.ai_collections = result.get("ai_collections")
+    storage_obj.ai_tags = result.get("ai_tags", [])
+    storage_obj.ai_collections = []  # Not provided in new format
     storage_obj.safety_info = result.get("safety_info")
 
     # Build ai_context_metadata (without embedding)
@@ -211,26 +200,19 @@ def process_image_analysis(object_id: int, image_path: str, filename: str) -> Di
             raise FileNotFoundError(f"Expected image.jpg in {image_path}")
         logger.debug(f"   Found image in directory: {img_path}")
 
-    # Read image data
-    with open(img_path, "rb") as f:
-        image_data = f.read()
+    # Full Vision Analysis using Claude with image paths (sonnet model)
+    from ai_analysis.service import _run_vision_analysis_with_paths
+    context_info = f"Filename: {filename}\nMedia type: image"
 
-    # AI Analysis
-    context = {
-        "filename": filename,
-        "media_type": "image"
-    }
-
-    result = asyncio.run(analyze_content(
-        data=image_data,
-        mime_type="image/jpeg",
-        context=context,
-        object_id=object_id
+    result = asyncio.run(_run_vision_analysis_with_paths(
+        image_paths=[str(img_path)],
+        context_info=context_info,
+        vision_mode="generic"
     ))
 
     logger.info(f"   🎨 AI analysis complete:")
     logger.info(f"      Safety: {result.get('safety_info', {}).get('isSafe', 'unknown')}")
-    logger.info(f"      Category: {result.get('ai_category', 'unknown')}")
+    logger.info(f"      Category: {result.get('category', 'unknown')}")
     logger.info(f"      Tags: {len(result.get('ai_tags', []))} extracted")
 
     # Update database
@@ -241,14 +223,14 @@ def process_image_analysis(object_id: int, image_path: str, filename: str) -> Di
     if not storage_obj:
         raise Exception(f"Storage object {object_id} not found in database")
 
-    # Update AI fields
+    # Update AI fields (using new result format from Claude-based analysis)
     storage_obj.ai_safety_rating = "safe" if result.get("safety_info", {}).get("isSafe") else "unsafe"
-    storage_obj.ai_category = result.get("ai_category")
-    storage_obj.ai_danger_potential = result.get("ai_danger_potential")
+    storage_obj.ai_category = result.get("category")
+    storage_obj.ai_danger_potential = result.get("danger_potential")
     storage_obj.ai_title = result.get("ai_title")
     storage_obj.ai_subtitle = result.get("ai_subtitle")
-    storage_obj.ai_tags = result.get("ai_tags")
-    storage_obj.ai_collections = result.get("ai_collections")
+    storage_obj.ai_tags = result.get("ai_tags", [])
+    storage_obj.ai_collections = []  # Not provided in new format
     storage_obj.safety_info = result.get("safety_info")
 
     # Build ai_context_metadata
