@@ -106,14 +106,15 @@ jobs:
             fi
             git fetch origin && git checkout main && git reset --hard origin/main
 
-            # Python venv
+            # Python venv (use --without-pip to avoid ensurepip issues on some systems)
             rm -rf venv
             if [ -f ~/.pyenv/versions/3.11.9/bin/python3.11 ]; then
-              ~/.pyenv/versions/3.11.9/bin/python3.11 -m venv venv
+              ~/.pyenv/versions/3.11.9/bin/python3.11 -m venv venv --without-pip
             else
-              python3 -m venv venv
+              python3 -m venv venv --without-pip
             fi
             source venv/bin/activate
+            curl -sS https://bootstrap.pypa.io/get-pip.py | python3
             pip install --upgrade pip
 
             # mac-transcoding-api dependency
@@ -178,14 +179,15 @@ jobs:
             fi
             git fetch origin && git checkout main && git reset --hard origin/main
 
-            # Python venv
+            # Python venv (use --without-pip to avoid ensurepip issues on some systems)
             rm -rf venv
             if [ -f ~/.pyenv/versions/3.11.9/bin/python3.11 ]; then
-              ~/.pyenv/versions/3.11.9/bin/python3.11 -m venv venv
+              ~/.pyenv/versions/3.11.9/bin/python3.11 -m venv venv --without-pip
             else
-              python3 -m venv venv
+              python3 -m venv venv --without-pip
             fi
             source venv/bin/activate
+            curl -sS https://bootstrap.pypa.io/get-pip.py | python3
             pip install --upgrade pip
 
             # mac-transcoding-api dependency
