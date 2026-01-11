@@ -1848,8 +1848,9 @@ async def upload_file(
                     StorageObject.tenant_id == tenant_id
                 )
                 if link_id:
-                    # Support semicolon-separated link_ids
-                    pattern = func.concat(';', StorageObject.link_id, ';')
+                    # Support semicolon-separated link_ids (use literal + for SQLite)
+                    from sqlalchemy import literal
+                    pattern = literal(';') + StorageObject.link_id + literal(';')
                     q = q.filter(pattern.like(f'%;{link_id};%'))
                 q = q.filter(StorageObject.mime_type.isnot(None)).filter(StorageObject.mime_type.like("video/%"))
                 candidate = q.order_by(StorageObject.created_at.desc()).first()
@@ -2461,8 +2462,9 @@ def get_asset_variant_references(
     if object_id is not None:
         q = q.filter(StorageObject.id == object_id)
     elif link_id:
-        # Support semicolon-separated link_ids: "101554;101563"
-        pattern = func.concat(';', StorageObject.link_id, ';')
+        # Support semicolon-separated link_ids (use literal + for SQLite)
+        from sqlalchemy import literal
+        pattern = literal(';') + StorageObject.link_id + literal(';')
         q = q.filter(pattern.like(f'%;{link_id};%'))
     elif collection_id:
         q = q.filter(StorageObject.collection_id == collection_id)
@@ -3523,7 +3525,9 @@ def list_objects(
     # Query for "101554" will match both "101554" and "101554;101563"
     if link_id:
         # Pattern: ';{search};' in ';{stored_value};' ensures exact key match
-        pattern = func.concat(';', StorageObject.link_id, ';')
+        # Use + operator which translates to || in SQLite
+        from sqlalchemy import literal
+        pattern = literal(';') + StorageObject.link_id + literal(';')
         q = q.filter(pattern.like(f'%;{link_id};%'))
     elif collection_id:
         q = q.filter(StorageObject.collection_id == collection_id)
