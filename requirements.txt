@@ -46,4 +46,4 @@ celery>=5.4.0
 redis>=5.0.0
 
 # Transcoding (deployment scripts convert this to local path)
-git+https://github.com/apopovic77/mac-transcoding-api.git@dev
+/var/code/mac-transcoding-api
