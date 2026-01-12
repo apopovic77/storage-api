@@ -1149,14 +1149,55 @@ async def _run_embedding_generation(
 
 
 def _clean_json_response(response: str) -> str:
-    """Clean JSON markers from AI response"""
+    """
+    Extract JSON from AI response.
+
+    Handles responses like:
+    - Pure JSON: {"key": "value"}
+    - Markdown wrapped: ```json\n{"key": "value"}\n```
+    - With extra text: ```json\n{"key": "value"}\n```\nExtra explanation here...
+    """
+    import re
+
     response = response.strip()
-    if response.startswith("```json"):
-        response = response[7:].strip()
-    if response.startswith("```"):
-        response = response[3:].strip()
-    if response.endswith("```"):
-        response = response[:-3].strip()
+
+    # Try to extract content from markdown code block first
+    code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response)
+    if code_block_match:
+        response = code_block_match.group(1).strip()
+
+    # Now find and extract the JSON object/array using bracket matching
+    json_start = -1
+    for i, c in enumerate(response):
+        if c == '{' or c == '[':
+            json_start = i
+            break
+
+    if json_start >= 0:
+        # Find the matching closing bracket
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(json_start, len(response)):
+            c = response[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if c == '\\' and in_string:
+                escape_next = True
+                continue
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == '{' or c == '[':
+                depth += 1
+            elif c == '}' or c == ']':
+                depth -= 1
+                if depth == 0:
+                    return response[json_start:i+1].strip()
+
     return response
 
 
