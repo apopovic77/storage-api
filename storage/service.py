@@ -308,7 +308,8 @@ class GenericStorageService:
             raise ValueError("File too large")
 
         # Use provided mime_type if available, otherwise auto-detect
-        mime = mime_type if mime_type else self._detect_mime_type(data, original_filename)
+        # Treat application/octet-stream as unknown (curl default when type is not specified)
+        mime = mime_type if mime_type and mime_type != "application/octet-stream" else self._detect_mime_type(data, original_filename)
         filename = self._create_filename(original_filename, owner_user_id, context)
         tenant_media_dir = self._get_tenant_dir(self.media_dir, tenant_id)
         file_path = tenant_media_dir / filename
@@ -1318,7 +1319,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                 print(f"--- SUCCESS: Audio-only WebM queued for AI transcription: {file_path}")
             else:
                 # Regular video processing: optionally enqueue AI analysis, then handle transcoding
-                if not skip_ai_safety:
+                if ai_mode != "none":
                     ai_thumb_dir = Path(f"/tmp/ai_thumbs_{storage_obj.id}")
                     result_code = extract_thumbnails_for_ai(file_path, ai_thumb_dir)
                     if result_code != 0:
@@ -1378,7 +1379,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                         
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("image/"):
             # Image processing - resize and optimize for AI safety analysis
-            if not skip_ai_safety:
+            if ai_mode != "none":
                 ai_image_dir = Path(f"/tmp/ai_images_{storage_obj.id}")
                 ai_image_dir.mkdir(parents=True, exist_ok=True)
                 
@@ -1407,7 +1408,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
             
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("audio/"):
             # Audio processing - queue for AI transcription and analysis
-            if not skip_ai_safety:
+            if ai_mode != "none":
                 _enqueue_ai_task(storage_obj.id, "audio", str(file_path), storage_obj.original_filename, ai_mode)
                 print(f"--- SUCCESS: Audio queued for AI analysis: {file_path}")
             
@@ -1417,7 +1418,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                                                   storage_obj.original_filename.lower().endswith('.txt') or
                                                   storage_obj.original_filename.lower().endswith('.csv'))):
             # Text processing - check for TTS request first, then queue for general analysis
-            if not skip_ai_safety:
+            if ai_mode != "none":
                 # Only try TTS processing if TTS modules are available
                 if TTS_AVAILABLE:
                     try:

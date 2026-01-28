@@ -141,7 +141,7 @@ async def _analyze_csv_chunk(
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{API_BASE_URL}/ai/gemini",
+                f"{API_BASE_URL}/ai/gemini/vision",
                 json=payload,
                 headers=headers,
                 timeout=120.0  # 2 minutes per chunk
@@ -490,7 +490,7 @@ async def _analyze_vision_comprehensive(
         try:
             print("🎨 Starting comprehensive vision analysis...", flush=True)
             response = await client.post(
-                f"{API_BASE_URL}/ai/gemini",
+                f"{API_BASE_URL}/ai/gemini/vision",
                 json=payload,
                 headers=headers,
                 timeout=timeout
@@ -685,7 +685,7 @@ async def _analyze_unified_mode(
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{API_BASE_URL}/ai/gemini",
+                f"{API_BASE_URL}/ai/gemini/vision",
                 json=payload,
                 headers=headers,
                 timeout=1200.0  # 20 minutes for large CSV files with Gemini Pro
@@ -883,7 +883,7 @@ async def _run_safety_check(
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{API_BASE_URL}/ai/gemini",
+                f"{API_BASE_URL}/ai/gemini/vision",
                 json=payload,
                 headers=headers,
                 timeout=30.0
@@ -931,7 +931,7 @@ async def _run_embedding_generation(
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{API_BASE_URL}/ai/gemini",
+                f"{API_BASE_URL}/ai/gemini/vision",
                 json=payload,
                 headers=headers,
                 timeout=1200.0  # 20 minutes for large CSV files with Gemini Pro
