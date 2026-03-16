@@ -3509,6 +3509,13 @@ def list_objects(
     link_id: Optional[str] = None,
     ext: Optional[str] = Query(None, description="Filter by original_filename extension, e.g. 'png'"),
     name: Optional[str] = Query(None, description="Filter by filename (contains, case-insensitive)"),
+    search: Optional[str] = Query(None, description="Full-text search across filename, title, description, ai_title, ai_tags (case-insensitive)"),
+    mime_type: Optional[str] = Query(None, description="Filter by MIME type prefix, e.g. 'video' matches video/*, 'image/png' matches exactly"),
+    has_hls: Optional[bool] = Query(None, description="Filter to only objects that have HLS transcoded streams (true) or lack them (false)"),
+    min_id: Optional[int] = Query(None, description="Only return objects with id >= min_id"),
+    max_id: Optional[int] = Query(None, description="Only return objects with id <= max_id"),
+    sort: Optional[str] = Query(None, description="Sort field: 'created_at' (default), 'id', 'filename', 'file_size'. Prefix with '-' for asc, default desc."),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(100, ge=1, le=5000),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -3551,7 +3558,53 @@ def list_objects(
         like_ext = f"%.{e}"
         q = q.filter(StorageObject.original_filename.ilike(like_ext))
 
-    results = q.order_by(StorageObject.created_at.desc()).limit(limit).all()
+    # Full-text search across multiple fields
+    if search:
+        like_search = f"%{search}%"
+        from sqlalchemy import or_
+        q = q.filter(or_(
+            StorageObject.original_filename.ilike(like_search),
+            StorageObject.title.ilike(like_search),
+            StorageObject.description.ilike(like_search),
+            StorageObject.ai_title.ilike(like_search),
+            StorageObject.ai_subtitle.ilike(like_search),
+            StorageObject.ai_tags.ilike(like_search),
+        ))
+
+    # MIME type filter (prefix match: "video" matches "video/*", "image/png" matches exactly)
+    if mime_type:
+        if '/' in mime_type:
+            q = q.filter(StorageObject.mime_type == mime_type)
+        else:
+            q = q.filter(StorageObject.mime_type.ilike(f"{mime_type}/%"))
+
+    # ID range filters
+    if min_id is not None:
+        q = q.filter(StorageObject.id >= min_id)
+    if max_id is not None:
+        q = q.filter(StorageObject.id <= max_id)
+
+    # Sorting
+    order_col = StorageObject.created_at
+    order_asc = False
+    if sort:
+        raw = sort.lstrip('-')
+        if sort.startswith('-'):
+            order_asc = True
+        sort_map = {
+            'created_at': StorageObject.created_at,
+            'id': StorageObject.id,
+            'filename': StorageObject.original_filename,
+            'file_size': StorageObject.file_size_bytes,
+        }
+        order_col = sort_map.get(raw, StorageObject.created_at)
+
+    q = q.order_by(order_col.asc() if order_asc else order_col.desc())
+
+    # Pagination
+    q = q.offset(offset)
+
+    results = q.limit(limit).all()
 
     # Get base URL from request for dynamic URL building
     base_url = get_base_url_from_request(request)
@@ -3647,15 +3700,22 @@ def list_objects(
                 pass
 
         response_items.append(response_obj)
+
+    # Post-query filter: has_hls (checked after URL building since HLS is filesystem-based)
+    if has_hls is not None:
+        response_items = [
+            item for item in response_items
+            if (bool(item.hls_url) == has_hls)
+        ]
     
-    # Get total count for pagination
-    total = q.count()
+    # Get total count for pagination (pre has_hls filter)
+    total = len(response_items)
     
     return StorageListResponse(
         items=response_items,
         total=total,
         limit=limit,
-        offset=0  # TODO: Add offset parameter for pagination
+        offset=offset,
     )
 
 
