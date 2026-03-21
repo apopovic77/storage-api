@@ -144,12 +144,12 @@ class StorageObjectResponse(BaseModel):
     owner_user_id: Optional[int] = None  # Some legacy objects have no owner
     object_key: str
     original_filename: str
-    file_url: str
+    file_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
     webview_url: Optional[str] = None
     mime_type: str
     file_size_bytes: int
-    checksum: str
+    checksum: Optional[str] = None
     is_public: bool
     context: Optional[str] = None
     collection_id: Optional[str] = None
