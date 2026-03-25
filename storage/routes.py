@@ -253,6 +253,9 @@ def _generate_contour_polygon_from_image(image_path: Path, simplify_factor: floa
 def _generate_trim_metadata_from_image(image_path: Path) -> Dict[str, Any]:
     """Compute trim bounds for a given image file."""
     with Image.open(image_path) as img:
+        # Convert palette images to RGBA to access alpha channel
+        if img.mode in ('P', 'PA'):
+            img = img.convert('RGBA')
         width, height = img.size
 
         def _compute_bbox(image: Image.Image) -> Optional[Tuple[int, int, int, int]]:
