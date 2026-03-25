@@ -3346,7 +3346,7 @@ def get_media_trim_bounds(
     return result
 
 
-@router.get("/media/batch/trim-bounds")
+@router.get("/batch/trim-bounds")
 def get_batch_trim_bounds(
     object_ids: List[int] = Query(..., alias="id", description="List of storage object IDs"),
     generate: bool = Query(False, description="Auto-generate trim bounds if missing"),
