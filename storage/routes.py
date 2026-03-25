@@ -2981,11 +2981,21 @@ def get_media_variant(
         requested_height: Optional[int],
         base_media_type: str,
         target_aspect_ratio: Optional[float],
+        cache_path: Optional[Path] = None,
     ) -> Response:
         if not stored_trim or not stored_trim.get("applied"):
             return FileResponse(
                 source_path,
                 media_type=base_media_type,
+                headers={"Content-Disposition": "inline"},
+            )
+
+        # Serve from cache if available
+        if cache_path and cache_path.exists():
+            media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+            return FileResponse(
+                cache_path,
+                media_type=media_type_map.get(target_format_value, "image/png"),
                 headers={"Content-Disposition": "inline"},
             )
 
@@ -3062,7 +3072,17 @@ def get_media_variant(
             img.save(buffer, format=save_format, **save_kwargs)
 
         buffer.seek(0)
-        return Response(content=buffer.getvalue(), media_type=media_type)
+        content = buffer.getvalue()
+
+        # Cache the trimmed result for next time
+        if cache_path:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_bytes(content)
+            except Exception:
+                pass
+
+        return Response(content=content, media_type=media_type)
 
     apply_trim = False
     if stored_trim and stored_trim.get("applied"):
@@ -3150,6 +3170,7 @@ def get_media_variant(
             height,
             media_type_current,
             target_aspect_ratio_value,
+            cache_path=dest_path,
         )
 
     # If derivative exists, serve it
