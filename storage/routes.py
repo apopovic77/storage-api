@@ -2907,6 +2907,8 @@ def get_media_variant(
 
                     if target_width and w > target_width:
                         new_h = int(h * (target_width / w))
+                        if img.mode in ('P', 'PA'):
+                            img = img.convert('RGBA')
                         img = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
 
                     # Save with requested format/quality
@@ -3024,6 +3026,9 @@ def get_media_variant(
                 target_w, target_h = w, h
 
             if target_w > 0 and target_h > 0 and (target_w != w or target_h != h):
+                # Convert palette/indexed images to RGBA before resize for quality
+                if img.mode in ('P', 'PA'):
+                    img = img.convert('RGBA')
                 img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
             img = _apply_letterbox_aspect_ratio(img, target_aspect_ratio, target_format_value)
@@ -3377,8 +3382,10 @@ async def proxy_external_image(
                 target_h = height
                 target_w = int(w * (height / max(h, 1)))
             
+            if img.mode in ('P', 'PA'):
+                img = img.convert('RGBA')
             img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
-        
+
         # Convert format if requested
         target_format = (format or "webp").lower()
         if target_format not in {"jpg", "jpeg", "png", "webp"}:
