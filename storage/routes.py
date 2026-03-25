@@ -3001,6 +3001,10 @@ def get_media_variant(
 
         buffer = BytesIO()
         with Image.open(source_path) as base_img:
+            # Convert palette to RGBA BEFORE any crop/resize for maximum quality
+            if base_img.mode in ('P', 'PA'):
+                base_img = base_img.convert('RGBA')
+
             base_width, base_height = base_img.size
             normalized = stored_trim.get("normalized") or [0.0, 0.0, 1.0, 1.0]
             if len(normalized) != 4:
