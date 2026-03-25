@@ -166,6 +166,12 @@ def _resolve_storage_object_path(obj: Any, refresh: bool = False) -> Path:
         else:
             src_path = cache_file
 
+    # Fallback: reference_path (e.g., SMB mount)
+    if (not src_path or not src_path.exists()) and getattr(obj, 'reference_path', None):
+        ref = Path(obj.reference_path)
+        if ref.exists():
+            src_path = ref
+
     if not src_path or not src_path.exists():
         raise HTTPException(status_code=404, detail="File not accessible")
 
