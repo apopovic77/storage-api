@@ -3331,10 +3331,96 @@ def get_media_trim_bounds(
     if not stored_trim:
         raise HTTPException(status_code=404, detail="Trim bounds not available")
 
-    # Add type field for consistency
+    # Add type field and scale factor for consistency
     result = dict(stored_trim)
     result["type"] = "rect"
+    # Scale factor: how much of the original the content fills (0-1)
+    # Used by renderers to normalize visual size after trim
+    w = result.get("width", 1)
+    h = result.get("height", 1)
+    tw = result.get("trim_width", w)
+    th = result.get("trim_height", h)
+    result["scale_x"] = round(tw / w, 4) if w else 1.0
+    result["scale_y"] = round(th / h, 4) if h else 1.0
+    result["scale"] = round(max(tw / w, th / h), 4) if w and h else 1.0
     return result
+
+
+@router.get("/media/batch/trim-bounds")
+def get_batch_trim_bounds(
+    object_ids: List[int] = Query(..., alias="id", description="List of storage object IDs"),
+    generate: bool = Query(False, description="Auto-generate trim bounds if missing"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    tenant_id: Optional[str] = Depends(get_tenant_id_optional),
+) -> Dict[str, Any]:
+    """
+    Batch get trim bounds for multiple storage objects.
+
+    Returns a map of object_id → trim_bounds.
+    Objects without trim bounds are omitted from the result.
+
+    Example: /storage/media/batch/trim-bounds?id=1763&id=3571&id=4200
+    """
+    tenant = current_user.tenant_id if current_user else "public"
+    objects = db.query(StorageObject).filter(
+        StorageObject.id.in_(object_ids)
+    ).all()
+
+    results: Dict[str, Any] = {}
+
+    for obj in objects:
+        # Skip non-images
+        if not (obj.mime_type or "").startswith("image/"):
+            continue
+
+        context_meta = obj.ai_context_metadata or {}
+        if not isinstance(context_meta, dict):
+            context_meta = {}
+
+        stored_trim = context_meta.get("trim_bounds")
+
+        # Auto-generate if requested and missing
+        if generate and (not stored_trim or not stored_trim.get("applied")):
+            try:
+                src_path = _resolve_storage_object_path(obj)
+                generated_meta = _generate_trim_metadata_from_image(src_path)
+                if generated_meta and generated_meta.get("applied"):
+                    context_meta["trim_bounds"] = generated_meta
+                    db.query(StorageObject).filter(StorageObject.id == obj.id).update(
+                        {"ai_context_metadata": context_meta}, synchronize_session=False
+                    )
+                    stored_trim = generated_meta
+            except Exception:
+                pass
+
+        if stored_trim and stored_trim.get("applied"):
+            w = stored_trim.get("width", 1)
+            h = stored_trim.get("height", 1)
+            tw = stored_trim.get("trim_width", w)
+            th = stored_trim.get("trim_height", h)
+            results[str(obj.id)] = {
+                "normalized": stored_trim.get("normalized"),
+                "scale_x": round(tw / w, 4) if w else 1.0,
+                "scale_y": round(th / h, 4) if h else 1.0,
+                "scale": round(max(tw / w, th / h), 4) if w and h else 1.0,
+                "trim_width": tw,
+                "trim_height": th,
+                "width": w,
+                "height": h,
+            }
+
+    if generate:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return {
+        "count": len(results),
+        "total_requested": len(object_ids),
+        "bounds": results,
+    }
 
 
 @router.get("/proxy")
