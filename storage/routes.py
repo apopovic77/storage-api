@@ -472,14 +472,15 @@ def _resolve_quality_for_width(width: int) -> int:
     return 85 if width >= 1000 else 75
 
 
-def _build_derivative_name(base_name: str, width: int, quality: int, fmt: str) -> str:
+def _build_derivative_name(base_name: str, width: int, quality: int, fmt: str, trim: bool = False) -> str:
     suffix = fmt.lower()
     if suffix == "jpeg":
         suffix = "jpg"
     if suffix not in {"jpg", "png", "webp"}:
         suffix = "webp"
     edge = max(width, 1)
-    return f"web_{base_name}_{edge}e_q{quality}.{suffix}"
+    trim_token = "_trim" if trim else ""
+    return f"web_{base_name}_{edge}e{trim_token}_q{quality}.{suffix}"
 
 
 @router.get("/cache-status", response_model=List[MediaCacheStatus])
@@ -3128,7 +3129,8 @@ def get_media_variant(
     aspect_ratio_token = (
         f"_ar{int(round(target_aspect_ratio_value * 1000))}" if target_aspect_ratio_value else ""
     )
-    dest_name = f"web_{base_name}_{max_edge}e{aspect_ratio_token}_q{q}.{suffix}"
+    trim_token = "_trim" if apply_trim else ""
+    dest_name = f"web_{base_name}_{max_edge}e{aspect_ratio_token}{trim_token}_q{q}.{suffix}"
     # Webview derivatives are now stored in tenant subdirectories
     dest_path = generic_storage.webview_dir / obj.tenant_id / dest_name
 
