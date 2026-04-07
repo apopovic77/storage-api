@@ -357,6 +357,7 @@ jobs:
             WorkingDirectory=${DEPLOY_PATH}
             Environment="STORAGE_DATA_DIR=${DATA_DIR}"
             Environment="DATABASE_URL=sqlite:///${DATA_DIR}/storage.db"
+            Environment="CORS_ORIGINS=https://admin.pdrei.arkturian.com,https://content.pdrei.arkturian.com,https://content-api.pdrei.arkturian.com,https://pdrei.arkturian.com,http://localhost:3000,http://localhost:8080"
             ExecStart=${DEPLOY_PATH}/venv/bin/gunicorn -w 2 -k uvicorn.workers.UvicornWorker --timeout 600 --graceful-timeout 20 --keep-alive 5 --bind 127.0.0.1:${UPSTREAM_PORT} main:app
             Restart=on-failure
             RestartSec=5
