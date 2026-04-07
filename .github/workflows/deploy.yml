@@ -316,7 +316,7 @@ jobs:
             REPO_URL="https://github.com/apopovic77/storage-api.git"
             SERVICE_NAME="storage-api"
             DOMAIN="storage-api.pdrei.arkturian.com"
-            UPSTREAM_PORT=8080
+            UPSTREAM_PORT=8090  # 8080 is taken by mcp-server on pdrei
 
             sudo mkdir -p "$DATA_DIR/chroma_db"
             sudo chown -R jascha:jascha "$DATA_DIR"
@@ -356,8 +356,8 @@ jobs:
             User=jascha
             WorkingDirectory=${DEPLOY_PATH}
             Environment="STORAGE_DATA_DIR=${DATA_DIR}"
-            Environment="DATABASE_URL=sqlite+aiosqlite:///${DATA_DIR}/storage.db"
-            ExecStart=${DEPLOY_PATH}/venv/bin/uvicorn main:app --host 127.0.0.1 --port ${UPSTREAM_PORT}
+            Environment="DATABASE_URL=sqlite:///${DATA_DIR}/storage.db"
+            ExecStart=${DEPLOY_PATH}/venv/bin/gunicorn -w 2 -k uvicorn.workers.UvicornWorker --timeout 600 --graceful-timeout 20 --keep-alive 5 --bind 127.0.0.1:${UPSTREAM_PORT} main:app
             Restart=on-failure
             RestartSec=5
 
