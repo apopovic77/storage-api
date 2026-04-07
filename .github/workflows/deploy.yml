@@ -284,6 +284,156 @@ jobs:
             DEPLOY_SCRIPT
 
   # ============================================================================
+  # PDREI: pdrei.arkturian.com (jascha) — minimal deploy, no celery/transcoding
+  # ============================================================================
+  deploy-pdrei:
+    name: Deploy to pdrei.arkturian.com
+    needs: test
+    if: |
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment:
+      name: pdrei
+      url: https://storage-api.pdrei.arkturian.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to pdrei
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PDREI_DEPLOY_HOST }}
+          username: ${{ secrets.PDREI_DEPLOY_USER }}
+          key: ${{ secrets.PDREI_DEPLOY_SSH_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -e
+
+            DEPLOY_PATH="/var/www/storage-api"
+            DATA_DIR="/var/lib/storage-api"
+            REPO_URL="https://github.com/apopovic77/storage-api.git"
+            SERVICE_NAME="storage-api"
+            DOMAIN="storage-api.pdrei.arkturian.com"
+            UPSTREAM_PORT=8080
+
+            sudo mkdir -p "$DATA_DIR/chroma_db"
+            sudo chown -R jascha:jascha "$DATA_DIR"
+
+            # Init git repo if needed
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              cd "$DEPLOY_PATH"
+              git init
+              git remote add origin "$REPO_URL" || git remote set-url origin "$REPO_URL"
+            fi
+
+            cd "$DEPLOY_PATH"
+            echo "Fetching latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Strip mac-transcoding-api git dependency (not used on pdrei)
+            sed -i 's|git+https://github.com/apopovic77/mac-transcoding-api.git@[a-z]*||g' requirements.txt
+
+            # Setup venv
+            if [ ! -d "venv" ]; then
+              python3 -m venv venv
+            fi
+            source venv/bin/activate
+            pip install --upgrade pip --quiet
+            pip install --no-cache-dir -r requirements.txt 2>&1 | tail -5
+
+            # Always (re)write systemd unit
+            echo "Writing systemd unit..."
+            sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<UNIT
+            [Unit]
+            Description=Storage API (pdrei instance)
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=jascha
+            WorkingDirectory=${DEPLOY_PATH}
+            Environment="STORAGE_DATA_DIR=${DATA_DIR}"
+            Environment="DATABASE_URL=sqlite+aiosqlite:///${DATA_DIR}/storage.db"
+            ExecStart=${DEPLOY_PATH}/venv/bin/uvicorn main:app --host 127.0.0.1 --port ${UPSTREAM_PORT}
+            Restart=on-failure
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+            sudo systemctl daemon-reload
+            sudo systemctl enable ${SERVICE_NAME}
+
+            # Always (re)write nginx vhost with SSL (multi-domain cert)
+            echo "Writing nginx vhost with SSL..."
+            CERT_PATH="/etc/letsencrypt/live/mcp.pdrei.arkturian.com"
+            if ! sudo test -d "$CERT_PATH"; then
+              echo "ERROR: SSL cert not found at $CERT_PATH"
+              exit 1
+            fi
+
+            sudo tee /etc/nginx/sites-available/${DOMAIN} > /dev/null <<NGINX
+            server {
+                listen 80;
+                server_name ${DOMAIN};
+                return 301 https://\$host\$request_uri;
+            }
+
+            server {
+                listen 443 ssl http2;
+                server_name ${DOMAIN};
+
+                ssl_certificate ${CERT_PATH}/fullchain.pem;
+                ssl_certificate_key ${CERT_PATH}/privkey.pem;
+                include /etc/letsencrypt/options-ssl-nginx.conf;
+                ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+                # Storage API handles file uploads — large body sizes
+                client_max_body_size 500M;
+                client_body_timeout 600s;
+                proxy_request_buffering off;
+
+                location / {
+                    proxy_pass http://127.0.0.1:${UPSTREAM_PORT};
+                    proxy_http_version 1.1;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 600s;
+                    proxy_buffering off;
+                }
+            }
+            NGINX
+            sudo ln -sf /etc/nginx/sites-available/${DOMAIN} /etc/nginx/sites-enabled/${DOMAIN}
+            sudo nginx -t && sudo systemctl reload nginx
+
+            # Restart and verify
+            sudo systemctl restart ${SERVICE_NAME}
+            sleep 5
+
+            if curl -sf http://localhost:${UPSTREAM_PORT}/health > /dev/null; then
+              echo "✅ Storage API healthy on pdrei (local)"
+              curl -s http://localhost:${UPSTREAM_PORT}/health
+              echo
+            else
+              echo "⚠️ Local health check failed"
+              sudo systemctl status ${SERVICE_NAME} --no-pager
+              sudo journalctl -u ${SERVICE_NAME} -n 50 --no-pager
+              exit 1
+            fi
+
+            # Verify HTTPS endpoint
+            if curl -sf https://${DOMAIN}/health > /dev/null; then
+              echo "✅ HTTPS endpoint reachable"
+            else
+              echo "⚠️ HTTPS endpoint check failed"
+            fi
+
+  # ============================================================================
   # SDK Regeneration (after all deployments)
   # ============================================================================
   trigger-sdk-regeneration:
