@@ -90,6 +90,7 @@ class StorageObject(Base):
     download_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True, index=True)  # TTL: NULL = never expires
 
     # AI Analysis Fields
     ai_category = Column(String, nullable=True)

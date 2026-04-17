@@ -150,6 +150,11 @@ async def connect_db():
                 if "ai_context_metadata" not in scols:
                     conn.execute(text("ALTER TABLE storage_objects ADD COLUMN ai_context_metadata JSON"))
 
+                # TTL: assets with expires_at get auto-purged by cleanup job
+                if "expires_at" not in scols:
+                    conn.execute(text("ALTER TABLE storage_objects ADD COLUMN expires_at DATETIME"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_storage_expires_at ON storage_objects (expires_at)"))
+
                 conn.commit()
     except Exception as e:
         print(f"Warning: Database migration failed: {e}")

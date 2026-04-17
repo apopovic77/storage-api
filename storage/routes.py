@@ -1784,6 +1784,7 @@ async def upload_file(
     ai_vision_mode: Optional[str] = Form(None),  # auto|generic|product
     ai_context_role: Optional[str] = Form(None),  # product|lifestyle|doc|other
     reuse_existing: bool = Form(True),  # Auto-detect duplicate uploads by filename+tenant+owner
+    ttl_hours: Optional[int] = Form(None),  # Auto-delete after N hours (None = permanent)
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user),
     api_key_header: Optional[str] = Security(_APIKeyHeader(name="X-API-KEY", auto_error=False)),
@@ -2043,6 +2044,7 @@ async def upload_file(
                     ai_context_metadata=ai_context_metadata if ai_context_metadata else None,
                     tenant_id=tenant_id,
                     mime_type=file.content_type,
+                    ttl_hours=ttl_hours,
                 )
 
             # Attach tenant_id derived from API key for downstream KG processing

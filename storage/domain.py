@@ -25,6 +25,7 @@ async def save_file_and_record(
     ai_context_metadata: Optional[dict] = None,
     tenant_id: Optional[str] = None,
     mime_type: Optional[str] = None,
+    ttl_hours: Optional[int] = None,
 ) -> StorageObject:
     """Save file via GenericStorageService and create a StorageObject row.
 
@@ -103,6 +104,12 @@ async def save_file_and_record(
     if saved.get("webview_filename"):
         metadata["webview_filename"] = saved["webview_filename"]
 
+    # Compute expiry if TTL requested
+    expires_at = None
+    if ttl_hours and ttl_hours > 0:
+        from datetime import datetime, timedelta
+        expires_at = datetime.utcnow() + timedelta(hours=ttl_hours)
+
     storage_obj = StorageObject(
         owner_user_id=owner_user_id,
         tenant_id=tenant_id or "arkturian",
@@ -131,6 +138,7 @@ async def save_file_and_record(
         reference_path=reference_path,
         external_uri=external_uri,
         ai_context_metadata=ai_context_metadata or {},
+        expires_at=expires_at,
     )
     db.add(storage_obj)
     db.commit()
