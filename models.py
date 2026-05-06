@@ -189,6 +189,7 @@ class StorageObjectResponse(BaseModel):
     ai_context_metadata: Optional[Dict[str, Any]] = None
     tenant_id: str = "arkturian"
     owner_email: Optional[str] = None  # Populated from join in search queries
+    expires_at: Optional[datetime] = None  # TTL: NULL = never expires, future datetime = scheduled purge
 
     class Config:
         from_attributes = True

@@ -4118,6 +4118,8 @@ class StorageObjectUpdate(BaseModel):
     ai_safety_rating: Optional[str] = None
     metadata_json: Optional[dict] = None
     original_filename: Optional[str] = None
+    # TTL — set to null to make object permanent, or to a future datetime to schedule expiry
+    expires_at: Optional[datetime] = None
     # Enhanced AI metadata fields
     ai_title: Optional[str] = None
     ai_subtitle: Optional[str] = None
