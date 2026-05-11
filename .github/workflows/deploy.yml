@@ -142,7 +142,8 @@ jobs:
             # Ensure TTL cleanup cron runs every 15 minutes
             CRON_CMD="*/15 * * * * cd $TARGET_DIR && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
             CRON_USER="www-data"
-            (crontab -u "$CRON_USER" -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
+            EXISTING_CRON=$(crontab -u "$CRON_USER" -l 2>/dev/null | grep -v cleanup_expired || true)
+            { [ -n "$EXISTING_CRON" ] && echo "$EXISTING_CRON"; echo "$CRON_CMD"; } | crontab -u "$CRON_USER" -
 
             systemctl restart storage-api.service
             systemctl restart celery-worker.service || true
@@ -236,7 +237,8 @@ jobs:
             # Ensure TTL cleanup cron runs every 15 minutes
             CRON_CMD="*/15 * * * * cd $TARGET_DIR && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
             CRON_USER="www-data"
-            (crontab -u "$CRON_USER" -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
+            EXISTING_CRON=$(crontab -u "$CRON_USER" -l 2>/dev/null | grep -v cleanup_expired || true)
+            { [ -n "$EXISTING_CRON" ] && echo "$EXISTING_CRON"; echo "$CRON_CMD"; } | crontab -u "$CRON_USER" -
 
             systemctl restart storage-api.service
             systemctl restart celery-worker.service || true
@@ -317,7 +319,8 @@ jobs:
 
             # Ensure TTL cleanup cron runs every 15 minutes
             CRON_CMD="*/15 * * * * cd $TARGET_DIR && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
-            (crontab -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -
+            EXISTING_CRON=$(crontab -l 2>/dev/null | grep -v cleanup_expired || true)
+            { [ -n "$EXISTING_CRON" ] && echo "$EXISTING_CRON"; echo "$CRON_CMD"; } | crontab -
 
             echo "=== Restarting services ==="
             sudo systemctl restart storage-api.service
@@ -472,7 +475,8 @@ jobs:
 
             # Ensure TTL cleanup cron runs every 15 minutes
             CRON_CMD="*/15 * * * * cd $DEPLOY_PATH && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
-            (crontab -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -
+            EXISTING_CRON=$(crontab -l 2>/dev/null | grep -v cleanup_expired || true)
+            { [ -n "$EXISTING_CRON" ] && echo "$EXISTING_CRON"; echo "$CRON_CMD"; } | crontab -
 
             # Restart and verify
             sudo systemctl restart ${SERVICE_NAME}
