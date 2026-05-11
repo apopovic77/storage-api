@@ -1764,7 +1764,8 @@ def rename_collection(
 
 @router.post("/upload", response_model=StorageObjectResponse)
 async def upload_file(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    original_filename: Optional[str] = Form(None),  # Required when file is omitted (path-only register mode)
     context: Optional[str] = Form(None),
     is_public: bool = Form(False),
     owner_email: Optional[str] = Form(None),
@@ -1791,20 +1792,49 @@ async def upload_file(
     api_key_header: Optional[str] = Security(_APIKeyHeader(name="X-API-KEY", auto_error=False)),
     tenant_id: Optional[str] = Depends(get_tenant_id),
 ):
-    # DIRECT FILE WRITE - bypass all logging
-    with open("/tmp/upload_debug.log", "a") as f:
-        import datetime
-        f.write(f"{datetime.datetime.now()} - UPLOAD ENTRY: filename={file.filename}\n")
-        f.flush()
-
-    # FIRST LINE LOG - before anything else
     import logging
     glogger = logging.getLogger("gunicorn.error")
-    glogger.error(f"🚀🚀🚀 UPLOAD_FILE ENTRY POINT: filename={file.filename}")
 
-    data = await file.read()
-
-    glogger.error(f"🚀 UPLOAD_FILE: after read, size={len(data)}, context={context}")
+    # === Path-only register mode (no multipart bytes) ===
+    # When storage_mode=reference AND reference_path is set AND file is omitted,
+    # read the file directly from the local filesystem. Saves bandwidth for
+    # same-host sync scripts uploading large GLB/PLY files.
+    from pathlib import Path as _Path  # local alias — Path is locally rebound later in this function
+    if file is None:
+        if storage_mode != "reference" or not reference_path:
+            raise HTTPException(
+                status_code=400,
+                detail="file is required unless storage_mode=reference AND reference_path is provided",
+            )
+        ref_p = _Path(reference_path)
+        if not ref_p.is_absolute():
+            raise HTTPException(status_code=400, detail="reference_path must be absolute")
+        try:
+            if not ref_p.exists() or not ref_p.is_file():
+                raise HTTPException(status_code=404, detail=f"reference_path not found: {reference_path}")
+            data = ref_p.read_bytes()
+        except PermissionError:
+            raise HTTPException(status_code=403, detail=f"storage-api cannot read {reference_path}")
+        derived_filename = original_filename or ref_p.name
+        # Derive MIME from real file extension (reference_path) — caller's original_filename
+        # may be a relpath-token without extension; we want a usable Content-Type.
+        import mimetypes as _mimetypes
+        _guessed, _ = _mimetypes.guess_type(str(ref_p))
+        # Build a minimal pseudo-UploadFile shim so downstream code can use file.filename / file.content_type
+        class _PathOnlyFile:
+            filename = derived_filename
+            content_type = _guessed  # None falls back to libmagic / suffix detection downstream
+        file = _PathOnlyFile()  # type: ignore[assignment]
+        glogger.error(f"🚀 UPLOAD_FILE [path-only]: size={len(data)}, ref={reference_path}")
+    else:
+        # Normal multipart upload
+        with open("/tmp/upload_debug.log", "a") as f_log:
+            import datetime
+            f_log.write(f"{datetime.datetime.now()} - UPLOAD ENTRY: filename={file.filename}\n")
+            f_log.flush()
+        glogger.error(f"🚀🚀🚀 UPLOAD_FILE ENTRY POINT: filename={file.filename}")
+        data = await file.read()
+        glogger.error(f"🚀 UPLOAD_FILE: after read, size={len(data)}, context={context}")
 
     try:
         # Special handling for HLS results: get tenant/owner from original video

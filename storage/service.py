@@ -338,7 +338,8 @@ class GenericStorageService:
         owner_user_id: int,
         context: Optional[str] = None,
         reference_path: str,
-        tenant_id: str = "arkturian"
+        tenant_id: str = "arkturian",
+        mime_type: Optional[str] = None,
     ) -> dict:
         """
         Reference mode: Generate thumbnails/variants without copying original file.
@@ -350,6 +351,8 @@ class GenericStorageService:
             owner_user_id: User ID
             context: Optional context string
             reference_path: Filesystem path to existing file (e.g., "/mnt/oneal/2026/Helmets/Airframe.jpg")
+            mime_type: Optional explicit MIME (from caller, e.g. derived from reference_path extension).
+                       Used when libmagic is unavailable / extension-less filenames.
 
         Returns:
             Dict with metadata (file_url points to reference_path, not storage)
@@ -357,7 +360,7 @@ class GenericStorageService:
         if len(data) > settings.MAX_FILE_SIZE:
             raise ValueError("File too large")
 
-        mime = self._detect_mime_type(data, original_filename)
+        mime = mime_type if mime_type and mime_type != "application/octet-stream" else self._detect_mime_type(data, original_filename)
         checksum = self._checksum(data)
 
         # Create temporary file for metadata extraction and thumbnail generation

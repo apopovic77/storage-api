@@ -85,6 +85,7 @@ async def save_file_and_record(
             context=context,
             reference_path=reference_path,
             tenant_id=tenant_id or "arkturian",
+            mime_type=mime_type,
         )
     else:
         # Normal copy mode - save everything
