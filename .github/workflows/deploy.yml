@@ -128,6 +128,18 @@ jobs:
 
             pip install --no-cache-dir -r requirements.txt
 
+            # Sync STORAGE_UPLOAD_DIR from systemd unit to .env (cleanup cron needs it)
+            UPLOAD_DIR=$(systemctl show storage-api.service -p Environment 2>/dev/null | grep -oP 'STORAGE_UPLOAD_DIR=\K[^ "]+' || true)
+            if [ -n "$UPLOAD_DIR" ]; then
+              grep -q "^STORAGE_UPLOAD_DIR=" "$TARGET_DIR/.env" 2>/dev/null \
+                || echo "STORAGE_UPLOAD_DIR=$UPLOAD_DIR" >> "$TARGET_DIR/.env"
+            fi
+
+            # Ensure TTL cleanup cron runs every 15 minutes
+            CRON_CMD="*/15 * * * * cd $TARGET_DIR && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
+            CRON_USER="www-data"
+            (crontab -u "$CRON_USER" -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
+
             systemctl restart storage-api.service
             systemctl restart celery-worker.service || true
             sleep 3
@@ -206,6 +218,18 @@ jobs:
             chown -R www-data:www-data "$TARGET_DIR/chroma_db"
             chmod -R 775 "$TARGET_DIR/chroma_db"
 
+            # Sync STORAGE_UPLOAD_DIR from systemd unit to .env (cleanup cron needs it)
+            UPLOAD_DIR=$(systemctl show storage-api.service -p Environment 2>/dev/null | grep -oP 'STORAGE_UPLOAD_DIR=\K[^ "]+' || true)
+            if [ -n "$UPLOAD_DIR" ]; then
+              grep -q "^STORAGE_UPLOAD_DIR=" "$TARGET_DIR/.env" 2>/dev/null \
+                || echo "STORAGE_UPLOAD_DIR=$UPLOAD_DIR" >> "$TARGET_DIR/.env"
+            fi
+
+            # Ensure TTL cleanup cron runs every 15 minutes
+            CRON_CMD="*/15 * * * * cd $TARGET_DIR && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
+            CRON_USER="www-data"
+            (crontab -u "$CRON_USER" -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
+
             systemctl restart storage-api.service
             systemctl restart celery-worker.service || true
             sleep 3
@@ -271,6 +295,17 @@ jobs:
 
             # Install dependencies (Python 3.13 compatible)
             pip install --no-cache-dir -r requirements.txt
+
+            # Sync STORAGE_UPLOAD_DIR from systemd unit to .env (cleanup cron needs it)
+            UPLOAD_DIR=$(sudo systemctl show storage-api.service -p Environment 2>/dev/null | grep -oP 'STORAGE_UPLOAD_DIR=\K[^ "]+' || true)
+            if [ -n "$UPLOAD_DIR" ]; then
+              grep -q "^STORAGE_UPLOAD_DIR=" "$TARGET_DIR/.env" 2>/dev/null \
+                || echo "STORAGE_UPLOAD_DIR=$UPLOAD_DIR" >> "$TARGET_DIR/.env"
+            fi
+
+            # Ensure TTL cleanup cron runs every 15 minutes
+            CRON_CMD="*/15 * * * * cd $TARGET_DIR && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
+            (crontab -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -
 
             echo "=== Restarting services ==="
             sudo systemctl restart storage-api.service
@@ -411,6 +446,17 @@ jobs:
             NGINX
             sudo ln -sf /etc/nginx/sites-available/${DOMAIN} /etc/nginx/sites-enabled/${DOMAIN}
             sudo nginx -t && sudo systemctl reload nginx
+
+            # Sync STORAGE_UPLOAD_DIR from systemd unit to .env (cleanup cron needs it)
+            UPLOAD_DIR=$(sudo systemctl show ${SERVICE_NAME}.service -p Environment 2>/dev/null | grep -oP 'STORAGE_UPLOAD_DIR=\K[^ "]+' || true)
+            if [ -n "$UPLOAD_DIR" ]; then
+              grep -q "^STORAGE_UPLOAD_DIR=" "$DEPLOY_PATH/.env" 2>/dev/null \
+                || echo "STORAGE_UPLOAD_DIR=$UPLOAD_DIR" >> "$DEPLOY_PATH/.env"
+            fi
+
+            # Ensure TTL cleanup cron runs every 15 minutes
+            CRON_CMD="*/15 * * * * cd $DEPLOY_PATH && ./venv/bin/python scripts/cleanup_expired.py >> /var/log/storage-api-cleanup.log 2>&1"
+            (crontab -l 2>/dev/null | grep -v cleanup_expired; echo "$CRON_CMD") | crontab -
 
             # Restart and verify
             sudo systemctl restart ${SERVICE_NAME}

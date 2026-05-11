@@ -169,6 +169,7 @@ class StorageObjectResponse(BaseModel):
     download_count: int
     created_at: datetime
     updated_at: datetime
+    expires_at: Optional[datetime] = None  # TTL: NULL = never expires
     ai_category: Optional[str] = None
     ai_danger_potential: Optional[int] = None
     ai_title: Optional[str] = None

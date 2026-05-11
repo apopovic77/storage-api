@@ -8,6 +8,7 @@ from typing import Optional, List, Any, Dict, Tuple
 import json
 import os
 import shutil
+import hashlib
 import base64
 import subprocess
 from pathlib import Path
@@ -2812,6 +2813,14 @@ def get_media_variant(
     quality: Optional[int] = Query(None, ge=1, le=100),
     trim: Optional[bool] = Query(None, description="Set true to crop using stored trim bounds (if available)"),
     refresh: bool = Query(False, description="When true, clears cached derivatives before rendering"),
+    # GLB / 3D model optimization params — forwarded to 3D-API /optimize/glb
+    decimate: Optional[float] = Query(None, ge=0, le=0.99, description="GLB: mesh decimation 0..0.99 via Blender"),
+    texture_format: Optional[str] = Query(None, description="GLB: webp | jpg | png"),
+    texture_quality: Optional[int] = Query(None, ge=1, le=100, description="GLB: texture encoder quality 1..100"),
+    texture_max_size: Optional[int] = Query(None, ge=0, description="GLB: max texture edge in px (0 = no downscale)"),
+    mesh_compression: Optional[str] = Query(None, description="GLB: none | meshopt | draco"),
+    output: Optional[str] = Query(None, description="GLB: glb | zip (re-bundled vs. split)"),
+    preset: Optional[str] = Query(None, description="GLB: web | mobile | preview (param shortcut)"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional),
     tenant_id: Optional[str] = Depends(get_tenant_id_optional),
@@ -2866,6 +2875,111 @@ def get_media_variant(
     stored_trim = None
     if isinstance(context_meta, dict):
         stored_trim = context_meta.get("trim_bounds")
+
+    # === GLB / 3D MODEL HANDLING ===
+    # Detect 3D model by MIME or filename suffix (octet-stream is common for GLB)
+    fname_lower = (obj.original_filename or "").lower()
+    is_glb_model = (
+        mime in {"model/gltf-binary", "model/gltf+json"}
+        or fname_lower.endswith((".glb", ".gltf"))
+    )
+    if is_glb_model:
+        glb_transform_requested = any([
+            decimate is not None,
+            texture_format is not None,
+            texture_quality is not None,
+            texture_max_size is not None,
+            mesh_compression is not None,
+            output is not None,
+            preset is not None,
+        ])
+
+        if not glb_transform_requested:
+            # No transform requested → serve original
+            return FileResponse(src_path, media_type="model/gltf-binary", headers={"Content-Disposition": "inline"})
+
+        # Apply preset defaults
+        preset_defaults = {
+            "web":     {"decimate": 0.0, "texture_format": "webp", "texture_quality": 85, "texture_max_size": 2048, "mesh_compression": "meshopt", "output": "glb"},
+            "mobile":  {"decimate": 0.5, "texture_format": "webp", "texture_quality": 75, "texture_max_size": 1024, "mesh_compression": "meshopt", "output": "glb"},
+            "preview": {"decimate": 0.85,"texture_format": "webp", "texture_quality": 60, "texture_max_size": 512,  "mesh_compression": "meshopt", "output": "glb"},
+        }
+        defaults = preset_defaults.get(preset or "", {})
+
+        glb_decimate         = decimate         if decimate         is not None else defaults.get("decimate", 0.0)
+        glb_texture_format   = (texture_format  if texture_format   is not None else defaults.get("texture_format", "webp")).lower()
+        glb_texture_quality  = texture_quality  if texture_quality  is not None else defaults.get("texture_quality", 85)
+        glb_texture_max_size = texture_max_size if texture_max_size is not None else defaults.get("texture_max_size", 2048)
+        glb_mesh_compression = (mesh_compression if mesh_compression is not None else defaults.get("mesh_compression", "none")).lower()
+        glb_output           = (output           if output           is not None else defaults.get("output", "glb")).lower()
+
+        if glb_texture_format not in {"webp", "jpg", "jpeg", "png"}:
+            raise HTTPException(status_code=400, detail="texture_format must be webp, jpg, or png")
+        if glb_mesh_compression not in {"none", "meshopt", "draco"}:
+            raise HTTPException(status_code=400, detail="mesh_compression must be none, meshopt, or draco")
+        if glb_output not in {"glb", "zip"}:
+            raise HTTPException(status_code=400, detail="output must be glb or zip")
+
+        # Local cache: keyed by checksum + params → auto-invalidated when file is updated
+        suffix_ext = "zip" if glb_output == "zip" else "glb"
+        cache_token_src = f"{obj.checksum or 'nochk'}|{glb_decimate}|{glb_texture_format}|{glb_texture_quality}|{glb_texture_max_size}|{glb_mesh_compression}|{glb_output}"
+        cache_token = hashlib.md5(cache_token_src.encode()).hexdigest()[:12]
+        base_name = Path(obj.object_key).stem if obj.object_key else f"obj_{object_id}"
+        glb_cache_name = f"glb_{base_name}_{cache_token}.{suffix_ext}"
+        glb_cache_path = generic_storage.webview_dir / (obj.tenant_id or "arkturian") / glb_cache_name
+
+        if refresh and glb_cache_path.exists():
+            glb_cache_path.unlink(missing_ok=True)
+
+        media_type_glb = "application/zip" if glb_output == "zip" else "model/gltf-binary"
+
+        if glb_cache_path.exists():
+            return FileResponse(glb_cache_path, media_type=media_type_glb, headers={"Content-Disposition": "inline"})
+
+        # Forward to 3D-API via multipart upload (portable across storage instances)
+        threed_api_url = os.getenv("THREED_API_URL", "http://127.0.0.1:8065")
+        try:
+            with open(src_path, "rb") as glb_f:
+                glb_bytes = glb_f.read()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read GLB source: {e}")
+
+        params_payload = {
+            "decimate": glb_decimate,
+            "texture_format": glb_texture_format,
+            "texture_quality": glb_texture_quality,
+            "texture_max_size": glb_texture_max_size,
+            "mesh_compression": glb_mesh_compression,
+            "output": glb_output,
+        }
+        try:
+            with httpx.Client(timeout=300.0) as client:
+                resp = client.post(
+                    f"{threed_api_url}/optimize/glb",
+                    params=params_payload,
+                    files={"file": (obj.original_filename or "model.glb", glb_bytes, "model/gltf-binary")},
+                )
+        except httpx.ConnectError as exc:
+            raise HTTPException(status_code=503, detail=f"3D-API unreachable: {exc}")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="3D-API timeout during GLB optimization")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"3D-API call failed: {exc}")
+
+        if resp.status_code != 200:
+            try:
+                detail = resp.json().get("detail", resp.text[:200])
+            except Exception:
+                detail = resp.text[:200]
+            raise HTTPException(status_code=resp.status_code, detail=f"3D-API: {detail}")
+
+        try:
+            glb_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            glb_cache_path.write_bytes(resp.content)
+        except Exception:
+            pass  # Best-effort cache write — still serve the response
+
+        return Response(content=resp.content, media_type=media_type_glb, headers={"Content-Disposition": "inline"})
 
     if not mime.startswith("image/"):
         # Handle video frame extraction if image format is requested OR variant=thumbnail
