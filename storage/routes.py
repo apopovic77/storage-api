@@ -2881,12 +2881,23 @@ def get_media_variant(
     media_type_current = (obj.mime_type or "application/octet-stream")
     mime = media_type_current.lower()
 
+    # Build extra headers for downstream consumers (HLS-aware frontends, etc.).
+    # CORSMiddleware exposes these via Access-Control-Expose-Headers (see main.py).
+    _media_extra_headers: Dict[str, str] = {"Content-Disposition": "inline"}
+    if obj.mime_type:
+        _media_extra_headers["X-Mime-Type"] = obj.mime_type
+    if obj.transcoding_status:
+        _media_extra_headers["X-Transcoding-Status"] = obj.transcoding_status
+    if obj.hls_url and obj.transcoding_status == "completed":
+        _media_extra_headers["X-HLS-URL"] = obj.hls_url
+
+
     # Resolve file path (handles both local and external URIs)
     src_path = _resolve_storage_object_path(obj, refresh=refresh)
 
     if mime == "application/pdf":
         if not PDF_RENDER_AVAILABLE:
-            return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
+            return FileResponse(src_path, media_type=media_type_current, headers=_media_extra_headers)
         try:
             preview_path = _ensure_pdf_preview(
                 obj,
@@ -2926,7 +2937,7 @@ def get_media_variant(
 
         if not glb_transform_requested:
             # No transform requested → serve original
-            return FileResponse(src_path, media_type="model/gltf-binary", headers={"Content-Disposition": "inline"})
+            return FileResponse(src_path, media_type="model/gltf-binary", headers=_media_extra_headers)
 
         # Apply preset defaults
         preset_defaults = {
@@ -2964,7 +2975,7 @@ def get_media_variant(
         media_type_glb = "application/zip" if glb_output == "zip" else "model/gltf-binary"
 
         if glb_cache_path.exists():
-            return FileResponse(glb_cache_path, media_type=media_type_glb, headers={"Content-Disposition": "inline"})
+            return FileResponse(glb_cache_path, media_type=media_type_glb, headers=_media_extra_headers)
 
         # Forward to 3D-API via multipart upload (portable across storage instances)
         threed_api_url = os.getenv("THREED_API_URL", "http://127.0.0.1:8065")
@@ -3009,7 +3020,7 @@ def get_media_variant(
         except Exception:
             pass  # Best-effort cache write — still serve the response
 
-        return Response(content=resp.content, media_type=media_type_glb, headers={"Content-Disposition": "inline"})
+        return Response(content=resp.content, media_type=media_type_glb, headers=_media_extra_headers)
 
     if not mime.startswith("image/"):
         # Handle video frame extraction if image format is requested OR variant=thumbnail
@@ -3032,7 +3043,7 @@ def get_media_variant(
             # Check if cached frame exists (skip ffmpeg if so)
             if cache_path.exists() and not refresh:
                 media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-                return FileResponse(cache_path, media_type=media_type_map.get(suffix, "image/jpeg"), headers={"Content-Disposition": "inline"})
+                return FileResponse(cache_path, media_type=media_type_map.get(suffix, "image/jpeg"), headers=_media_extra_headers)
 
             try:
                 # Extract frame from middle of video
@@ -3076,12 +3087,12 @@ def get_media_variant(
                     img.save(cache_path, format=save_format, **save_kwargs)
 
                     media_type_map = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
-                    return FileResponse(cache_path, media_type=media_type_map.get(save_format, "image/jpeg"), headers={"Content-Disposition": "inline"})
+                    return FileResponse(cache_path, media_type=media_type_map.get(save_format, "image/jpeg"), headers=_media_extra_headers)
             except Exception as e:
                 print(f"⚠️ Failed to extract video frame for object {object_id}: {e}")
                 # Fall through to return original video
 
-        return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
+        return FileResponse(src_path, media_type=media_type_current, headers=_media_extra_headers)
 
     # Compute source paths
     # Try local file first
@@ -3139,7 +3150,7 @@ def get_media_variant(
             return FileResponse(
                 source_path,
                 media_type=base_media_type,
-                headers={"Content-Disposition": "inline"},
+                headers=_media_extra_headers,
             )
 
         # Serve from cache if available
@@ -3148,7 +3159,7 @@ def get_media_variant(
             return FileResponse(
                 cache_path,
                 media_type=media_type_map.get(target_format_value, "image/png"),
-                headers={"Content-Disposition": "inline"},
+                headers=_media_extra_headers,
             )
 
         buffer = BytesIO()
@@ -3238,7 +3249,7 @@ def get_media_variant(
             except Exception:
                 pass
 
-        return Response(content=content, media_type=media_type)
+        return Response(content=content, media_type=media_type, headers=_media_extra_headers)
 
     apply_trim = False
     if stored_trim and stored_trim.get("applied"):
@@ -3249,7 +3260,7 @@ def get_media_variant(
 
     # Default: if no hints provided, return original (full)
     if not apply_trim and variant is None and display_for is None and not width and not height and not format:
-        return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
+        return FileResponse(src_path, media_type=media_type_current, headers=_media_extra_headers)
 
     # Derive a deterministic webview name for medium/custom
     if obj.object_key:
@@ -3286,7 +3297,7 @@ def get_media_variant(
         max_edge = 320  # Default thumbnail width (increased from 300 to match video frame extraction)
     elif variant == "full":
         if not apply_trim:
-            return FileResponse(src_path, media_type=media_type_current, headers={"Content-Disposition": "inline"})
+            return FileResponse(src_path, media_type=media_type_current, headers=_media_extra_headers)
         max_edge = None
     else:
         # medium or custom
@@ -3337,7 +3348,7 @@ def get_media_variant(
             "png": "image/png",
             "webp": "image/webp",
         }.get(suffix, "image/jpeg")
-        return FileResponse(dest_path, media_type=media_type, headers={"Content-Disposition": "inline"})
+        return FileResponse(dest_path, media_type=media_type, headers=_media_extra_headers)
 
     # Generate derivative and persist
     try:
@@ -3395,7 +3406,7 @@ def get_media_variant(
         "png": "image/png",
         "webp": "image/webp",
     }.get(suffix, "image/jpeg")
-    return FileResponse(dest_path, media_type=media_type, headers={"Content-Disposition": "inline"})
+    return FileResponse(dest_path, media_type=media_type, headers=_media_extra_headers)
 
 
 @router.get("/media/{object_id}/trim-bounds")

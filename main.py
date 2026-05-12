@@ -24,13 +24,15 @@ logging.basicConfig(
 logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
-from fastapi import FastAPI
+import re
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from storage import routes as storage_routes
 from tenancy import routes as tenant_routes
 from admin import routes as admin_routes
-from database import connect_db, disconnect_db
+from database import connect_db, disconnect_db, SessionLocal
 from config import settings
+from models import StorageObject
 
 app = FastAPI(
     title="Storage API",
@@ -54,7 +56,55 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Content-Length",
+        "Content-Range",
+        "X-HLS-URL",
+        "X-Transcoding-Status",
+        "X-Mime-Type",
+    ],
 )
+
+_MEDIA_ID_RE = re.compile(r"^/storage/media/(\d+)/?$")
+
+
+@app.middleware("http")
+async def storage_media_head_headers(request: Request, call_next):
+    """
+    For HEAD /storage/media/{id} requests, return a body-less response with
+    X-Mime-Type, X-Transcoding-Status, X-HLS-URL headers so HLS-aware
+    frontends can pick HLS vs progressive MP4 without a second round-trip.
+
+    Bypasses FastAPI's Starlette auto-HEAD handler which strips custom
+    headers from FileResponse. Runs before any route handler.
+    """
+    if request.method == "HEAD":
+        m = _MEDIA_ID_RE.match(request.url.path)
+        if m:
+            object_id = int(m.group(1))
+            db = SessionLocal()
+            try:
+                obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+            finally:
+                db.close()
+            if not obj:
+                return Response(status_code=404)
+            headers = {"Content-Disposition": "inline", "Accept-Ranges": "bytes"}
+            if obj.mime_type:
+                headers["X-Mime-Type"] = obj.mime_type
+            if obj.transcoding_status:
+                headers["X-Transcoding-Status"] = obj.transcoding_status
+            if obj.hls_url and obj.transcoding_status == "completed":
+                headers["X-HLS-URL"] = obj.hls_url
+            if obj.file_size_bytes:
+                headers["Content-Length"] = str(obj.file_size_bytes)
+            return Response(
+                status_code=200,
+                media_type=(obj.mime_type or "application/octet-stream"),
+                headers=headers,
+            )
+    return await call_next(request)
+
 
 # Include routers
 app.include_router(storage_routes.router, prefix="/storage", tags=["Storage"])
