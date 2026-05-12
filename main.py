@@ -66,6 +66,26 @@ app.add_middleware(
 )
 
 _MEDIA_ID_RE = re.compile(r"^/storage/media/(\d+)/?$")
+_EXPOSE_HEADERS = "Content-Length, Content-Range, X-HLS-URL, X-Transcoding-Status, X-Mime-Type"
+
+
+def _apply_cors_for_head(headers: dict, request: Request) -> dict:
+    """
+    Manually attach CORS response headers because our HEAD-intercept middleware
+    runs OUTER of CORSMiddleware in Starlette's stack — returning a Response
+    here bypasses CORSMiddleware's send-wrap, so it never sees the response
+    to inject Access-Control-Expose-Headers / Allow-Origin. We mirror the
+    behavior here for HEAD /storage/media/{id} only.
+    """
+    origin = request.headers.get("origin")
+    if origin:
+        allowed = settings.CORS_ORIGINS or []
+        if "*" in allowed or origin in allowed:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Vary"] = "Origin"
+            headers["Access-Control-Allow-Credentials"] = "true"
+    headers["Access-Control-Expose-Headers"] = _EXPOSE_HEADERS
+    return headers
 
 
 @app.middleware("http")
@@ -88,7 +108,7 @@ async def storage_media_head_headers(request: Request, call_next):
             finally:
                 db.close()
             if not obj:
-                return Response(status_code=404)
+                return Response(status_code=404, headers=_apply_cors_for_head({}, request))
             headers = {"Content-Disposition": "inline", "Accept-Ranges": "bytes"}
             if obj.mime_type:
                 headers["X-Mime-Type"] = obj.mime_type
@@ -98,6 +118,7 @@ async def storage_media_head_headers(request: Request, call_next):
                 headers["X-HLS-URL"] = obj.hls_url
             if obj.file_size_bytes:
                 headers["Content-Length"] = str(obj.file_size_bytes)
+            _apply_cors_for_head(headers, request)
             return Response(
                 status_code=200,
                 media_type=(obj.mime_type or "application/octet-stream"),
