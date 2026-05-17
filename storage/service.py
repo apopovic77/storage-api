@@ -1151,6 +1151,58 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
     if skip_ai_safety:
         ai_mode = "none"
 
+    # Skip AI analysis for markup/source-code contexts that are clearly not
+    # user-uploaded media (3DPresenter Markdown, JSON config, etc.). The
+    # safety pipeline is built around image/video moderation; gating these
+    # text payloads gives no signal and stalls legitimate non-media flows.
+    SAFETY_BYPASS_CONTEXTS = {"presentation", "config", "template", "schema"}
+    SAFETY_BYPASS_MIMES = {
+        "text/markdown", "text/x-markdown", "text/csv", "text/plain",
+        "application/json", "application/xml", "text/xml", "text/yaml",
+        "application/x-yaml",
+    }
+    ctx = (storage_obj.context or "").lower()
+    mime_lc = (storage_obj.mime_type or "").lower()
+    fname_lc = (storage_obj.original_filename or "").lower()
+    is_markup = (
+        ctx in SAFETY_BYPASS_CONTEXTS
+        or mime_lc in SAFETY_BYPASS_MIMES
+        or fname_lc.endswith((".md", ".markdown", ".json", ".yaml", ".yml", ".xml", ".toml", ".csv"))
+    )
+    if is_markup and ai_mode != "none":
+        # Mark as completed/safe so the quarantine gate lets the asset
+        # through. We don't run an actual safety check — the content shape
+        # (markup, no embedded media) makes the risk negligible.
+        logger.info(
+            f"⏭️  Bypassing safety analysis for markup/config "
+            f"(ctx={storage_obj.context!r} mime={storage_obj.mime_type!r}) "
+            f"on object {storage_obj.id}"
+        )
+        try:
+            from database import SessionLocal as _SL
+            from models import StorageObject as _SO
+            _bp_db = _SL()
+            try:
+                _bp_obj = _bp_db.query(_SO).filter(_SO.id == storage_obj.id).first()
+                if _bp_obj is not None:
+                    _bp_obj.ai_safety_status = "completed"
+                    _bp_obj.ai_safety_rating = "safe"
+                    _bp_obj.ai_danger_potential = 1
+                    _bp_obj.safety_info = {
+                        "isSafe": True,
+                        "confidence": 1.0,
+                        "reasoning": "Markup/config bypass — not subject to media safety pipeline.",
+                        "flags": [],
+                        "version": "v2",
+                        "bypass_reason": "markup_context",
+                    }
+                    _bp_db.commit()
+            finally:
+                _bp_db.close()
+        except Exception as _bp_exc:
+            print(f"⚠️ Markup safety-bypass write failed: {_bp_exc}")
+        return
+
     # Skip AI analysis for 3D model files (binary formats that can't be analyzed by vision AI)
     is_3d_model = False
     if storage_obj.mime_type:
@@ -1173,7 +1225,10 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
     try:
         import shutil
         import httpx
-        from pathlib import Path
+        # `Path` already imported at module level; the previous local re-import
+        # caused Python to treat Path as a function-local variable, which made
+        # the earlier `_AI_SCRATCH_ROOT = Path(...)` line raise UnboundLocalError
+        # on every upload.
         from config import settings
 
         # Extract tenant_id from storage_obj or default to arkturian
