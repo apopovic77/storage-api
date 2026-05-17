@@ -51,8 +51,18 @@ INTERNAL_API_KEY = os.getenv("AI_INTERNAL_API_KEY", "Inetpass1")
 API_BASE_URL = os.getenv("AI_API_BASE_URL", "http://127.0.0.1:8000")
 
 # Model configuration for different tasks
-SAFETY_MODEL = os.getenv("SAFETY_MODEL", "haiku")  # Fast model for safety checks
-ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "sonnet")  # Pro model for full analysis
+SAFETY_MODEL = os.getenv("SAFETY_MODEL", "haiku")  # Fast Claude model for safety checks
+ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "sonnet")  # Pro Claude model for full analysis
+
+# Backend selection for image-safety analysis.
+# - "gemini" (default): POST /ai/gemini/vision — base64 images in body.
+#   Used because gemini-2.0-flash is fast, has working auth, and produces
+#   stable JSON for the safety prompt.
+# - "claude": POST /ai/claude?model={SAFETY_MODEL} — local paths in body.
+#   Requires `claude -p` CLI auth to be valid on the host (currently broken
+#   on multiple servers — kept as fallback for when auth is refreshed).
+SAFETY_BACKEND = os.getenv("SAFETY_BACKEND", "gemini").lower()
+ANALYSIS_BACKEND = os.getenv("ANALYSIS_BACKEND", SAFETY_BACKEND).lower()
 
 # CSV Chunking configuration
 CSV_CHUNK_SIZE = 10  # Process 10 rows per chunk (small for testing/debugging)
@@ -96,6 +106,87 @@ async def _call_claude_with_images(
         response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         return response.json().get("message", "")
+
+
+async def _call_gemini_with_images(
+    prompt: str,
+    image_paths: List[str],
+    timeout: float = 120.0,
+) -> str:
+    """
+    Call /ai/gemini/vision with local images encoded as base64.
+
+    Gemini's endpoint takes inline-base64 images in `prompt.images[]`, not file
+    paths. We read each path off disk, encode, and POST as PromptText. The
+    response shape is `{"response": "...", "model": "...", ...}` and we return
+    `response` directly — the safety prompt asks for strict JSON so the caller
+    can `json.loads()` the result.
+
+    Why this is the safety default (vs. Claude): the Gemini CLI auth works in
+    the deployed environment, while the Claude CLI on multiple servers
+    currently fails with 401. The actual classification quality is comparable
+    for the safety prompt because both models read the same instructions.
+
+    Args:
+        prompt: The text prompt (already formatted with context_info).
+        image_paths: Local file paths — the function reads + base64-encodes them.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        Raw response text from Gemini (typically JSON per the safety prompt).
+    """
+    images_b64: List[str] = []
+    for p in image_paths:
+        try:
+            with open(p, "rb") as fh:
+                images_b64.append(base64.b64encode(fh.read()).decode("ascii"))
+        except FileNotFoundError:
+            # A missing pre-process file is a hard failure — propagate so the
+            # Celery autoretry layer picks it up and ultimately marks the
+            # storage object ai_safety_status='failed' (fail-closed).
+            raise
+
+    payload = {"prompt": {"text": prompt, "images": images_b64}}
+    headers = {"X-API-KEY": INTERNAL_API_KEY, "Content-Type": "application/json"}
+    url = f"{API_BASE_URL}/ai/gemini/vision"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        body = response.json()
+        # Endpoint returns under both "response" and "message" — prefer "response",
+        # fall back to "message" for forward-compat with future api-ai versions.
+        return body.get("response") or body.get("message") or ""
+
+
+async def _call_ai_with_images(
+    prompt: str,
+    image_paths: List[str],
+    *,
+    backend: str,
+    claude_model: str = None,
+    timeout: float = 120.0,
+) -> str:
+    """
+    Dispatcher: route an image+text safety/vision call to the configured backend.
+    Centralises the backend switch so SAFETY_BACKEND / ANALYSIS_BACKEND only
+    need to be checked once.
+    """
+    b = (backend or "gemini").lower()
+    if b == "claude":
+        return await _call_claude_with_images(
+            prompt=prompt,
+            image_paths=image_paths,
+            model=claude_model,
+            timeout=timeout,
+        )
+    if b == "gemini":
+        return await _call_gemini_with_images(
+            prompt=prompt,
+            image_paths=image_paths,
+            timeout=timeout,
+        )
+    raise ValueError(f"Unknown AI backend: {backend!r}. Use 'gemini' or 'claude'.")
 
 
 def extract_excel_as_text(data: bytes, mime_type: str) -> str:
@@ -1005,12 +1096,13 @@ async def _run_safety_check_with_paths(
     # via BaseStorageTask.autoretry_for. After max_retries, the task's
     # on_failure hook marks ai_safety_status='failed' which the quarantine
     # logic treats as unsafe. Fail-closed throughout.
-    print(f"🛡️ Running safety check with Claude ({SAFETY_MODEL}) on {len(image_paths)} images")
-    ai_response_str = await _call_claude_with_images(
+    print(f"🛡️ Running safety check via {SAFETY_BACKEND} backend on {len(image_paths)} images")
+    ai_response_str = await _call_ai_with_images(
         prompt=prompt,
         image_paths=image_paths,
-        model=SAFETY_MODEL,
-        timeout=60.0
+        backend=SAFETY_BACKEND,
+        claude_model=SAFETY_MODEL,
+        timeout=60.0,
     )
 
     ai_response_str = _clean_json_response(ai_response_str)
@@ -1060,12 +1152,13 @@ async def _run_vision_analysis_with_paths(
     prompt = VISION_ANALYSIS_PROMPT.format(context_info=context_info)
 
     # Let exceptions bubble for Celery autoretry; see _run_safety_check_with_paths.
-    print(f"🎨 Running vision analysis with Claude ({ANALYSIS_MODEL}) on {len(image_paths)} images")
-    ai_response_str = await _call_claude_with_images(
+    print(f"🎨 Running vision analysis via {ANALYSIS_BACKEND} backend on {len(image_paths)} images")
+    ai_response_str = await _call_ai_with_images(
         prompt=prompt,
         image_paths=image_paths,
-        model=ANALYSIS_MODEL,
-        timeout=120.0
+        backend=ANALYSIS_BACKEND,
+        claude_model=ANALYSIS_MODEL,
+        timeout=120.0,
     )
 
     ai_response_str = _clean_json_response(ai_response_str)
