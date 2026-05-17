@@ -16,11 +16,33 @@ from ai_analysis.config import ai_config, AIAnalysisMode
 from ai_analysis.prompts import (
     UNIFIED_PROMPT,
     SAFETY_PROMPT,
+    SAFETY_PROMPT_VERSION,
     EMBEDDING_PROMPT,
     CHUNKED_CSV_PROMPT,
     VISION_ANALYSIS_PROMPT,
-    build_context_info
+    build_context_info,
 )
+
+
+def _sanitize_for_prompt(value: Optional[str], *, max_len: int = 200, label: str = "value") -> str:
+    """
+    Neutralize user-controlled strings before they enter a Claude prompt.
+
+    Strips control characters, newlines and angle brackets that could be used to
+    close the <untrusted> trust-boundary block and inject instructions. Truncates
+    to max_len to prevent prompt overflow attacks.
+    """
+    if value is None:
+        return f"(no {label})"
+    s = str(value)
+    # Strip control chars + collapse whitespace (incl. newlines)
+    s = "".join(c for c in s if c == " " or c.isprintable())
+    s = " ".join(s.split())
+    # Neutralize XML-ish tags so the <untrusted> boundary cannot be closed early
+    s = s.replace("<", "‹").replace(">", "›")
+    if len(s) > max_len:
+        s = s[:max_len] + "…"
+    return s or f"(empty {label})"
 import asyncio
 
 # API configuration
@@ -979,36 +1001,42 @@ async def _run_safety_check_with_paths(
     if text_content:
         prompt += f"\n\n--- CONTENT ---\n{text_content}"
 
-    try:
-        print(f"🛡️ Running safety check with Claude ({SAFETY_MODEL}) on {len(image_paths)} images")
-        ai_response_str = await _call_claude_with_images(
-            prompt=prompt,
-            image_paths=image_paths,
-            model=SAFETY_MODEL,
-            timeout=60.0
-        )
+    # No try/except here: let exceptions propagate so the Celery task retries
+    # via BaseStorageTask.autoretry_for. After max_retries, the task's
+    # on_failure hook marks ai_safety_status='failed' which the quarantine
+    # logic treats as unsafe. Fail-closed throughout.
+    print(f"🛡️ Running safety check with Claude ({SAFETY_MODEL}) on {len(image_paths)} images")
+    ai_response_str = await _call_claude_with_images(
+        prompt=prompt,
+        image_paths=image_paths,
+        model=SAFETY_MODEL,
+        timeout=60.0
+    )
 
-        ai_response_str = _clean_json_response(ai_response_str)
-        result = json.loads(ai_response_str)
+    ai_response_str = _clean_json_response(ai_response_str)
+    result = json.loads(ai_response_str)
 
-        safety_check = result.get("safetyCheck", {})
-        classification = result.get("classification", {})
+    safety_check = result.get("safetyCheck", {})
+    classification = result.get("classification", {})
 
-        return {
-            "category": classification.get("category", "unknown"),
-            "danger_potential": classification.get("dangerPotential", 1),
-            "safety_info": {
-                "isSafe": safety_check.get("isSafe", True),
-                "confidence": safety_check.get("confidence", 1.0),
-                "reasoning": safety_check.get("reasoning", ""),
-                "flags": safety_check.get("flags", [])
-            },
-            "prompt": prompt,
-            "ai_response": ai_response_str
-        }
-    except Exception as e:
-        print(f"Safety check with Claude failed: {e}")
-        return _error_response(f"Safety check failed: {e}")
+    # If the model omitted isSafe, fail closed (don't assume True).
+    is_safe = safety_check.get("isSafe")
+    if is_safe is None:
+        is_safe = False
+
+    return {
+        "category": classification.get("category", "unknown"),
+        "danger_potential": classification.get("dangerPotential", 1),
+        "safety_info": {
+            "isSafe": is_safe,
+            "confidence": safety_check.get("confidence", 0.5),
+            "reasoning": safety_check.get("reasoning", ""),
+            "flags": safety_check.get("flags", []),
+            "version": SAFETY_PROMPT_VERSION,
+        },
+        "prompt": prompt,
+        "ai_response": ai_response_str
+    }
 
 
 async def _run_vision_analysis_with_paths(
@@ -1031,36 +1059,41 @@ async def _run_vision_analysis_with_paths(
     """
     prompt = VISION_ANALYSIS_PROMPT.format(context_info=context_info)
 
-    try:
-        print(f"🎨 Running vision analysis with Claude ({ANALYSIS_MODEL}) on {len(image_paths)} images")
-        ai_response_str = await _call_claude_with_images(
-            prompt=prompt,
-            image_paths=image_paths,
-            model=ANALYSIS_MODEL,
-            timeout=120.0
-        )
+    # Let exceptions bubble for Celery autoretry; see _run_safety_check_with_paths.
+    print(f"🎨 Running vision analysis with Claude ({ANALYSIS_MODEL}) on {len(image_paths)} images")
+    ai_response_str = await _call_claude_with_images(
+        prompt=prompt,
+        image_paths=image_paths,
+        model=ANALYSIS_MODEL,
+        timeout=120.0
+    )
 
-        ai_response_str = _clean_json_response(ai_response_str)
-        result = json.loads(ai_response_str)
+    ai_response_str = _clean_json_response(ai_response_str)
+    result = json.loads(ai_response_str)
 
-        # Extract all components
-        safety_check = result.get("safetyCheck", {})
-        classification = result.get("classification", {})
-        product_analysis = result.get("productAnalysis", {})
-        visual_analysis = result.get("visualAnalysis", {})
-        layout_intelligence = result.get("layoutIntelligence", {})
-        semantic_props = result.get("semanticProperties", {})
-        tech_metadata = result.get("technicalMetadata", {})
-        media_analysis = result.get("mediaAnalysis", {})
-        embedding_info = result.get("embeddingInfo", {})
+    # Extract all components
+    safety_check = result.get("safetyCheck", {})
+    classification = result.get("classification", {})
+    product_analysis = result.get("productAnalysis", {})
+    visual_analysis = result.get("visualAnalysis", {})
+    layout_intelligence = result.get("layoutIntelligence", {})
+    semantic_props = result.get("semanticProperties", {})
+    tech_metadata = result.get("technicalMetadata", {})
+    media_analysis = result.get("mediaAnalysis", {})
+    embedding_info = result.get("embeddingInfo", {})
 
-        # Build comprehensive result
-        return {
+    is_safe = safety_check.get("isSafe")
+    if is_safe is None:
+        is_safe = False
+
+    # Build comprehensive result
+    return {
             "safety_info": {
-                "isSafe": safety_check.get("isSafe", True),
-                "confidence": safety_check.get("confidence", 1.0),
+                "isSafe": is_safe,
+                "confidence": safety_check.get("confidence", 0.5),
                 "reasoning": safety_check.get("reasoning", ""),
-                "flags": safety_check.get("flags", [])
+                "flags": safety_check.get("flags", []),
+                "version": SAFETY_PROMPT_VERSION,
             },
             "category": classification.get("category", "unknown"),
             "danger_potential": classification.get("dangerPotential", 1),
@@ -1087,11 +1120,6 @@ async def _run_vision_analysis_with_paths(
             },
             "ai_response": ai_response_str
         }
-    except Exception as e:
-        print(f"Vision analysis with Claude failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return _error_response(f"Vision analysis failed: {e}")
 
 
 async def _run_embedding_generation(
@@ -1202,15 +1230,26 @@ def _clean_json_response(response: str) -> str:
 
 
 def _error_response(reason: str) -> Dict[str, Any]:
-    """Return structured error response for downstream consumers."""
+    """
+    Return structured error response for downstream consumers.
+
+    FAIL-CLOSED: isSafe=False with high danger_potential. Callers MUST treat
+    AI analysis failure as untrusted content. The /storage/media quarantine
+    logic uses ai_safety_status to distinguish "completed-unsafe" (block)
+    from "failed" (also block until manual review). Defaulting to isSafe=True
+    on AI failure would create a bypass: any transient Claude/Gemini outage
+    would silently mark malicious uploads as safe.
+    """
+    from ai_analysis.prompts import SAFETY_PROMPT_VERSION
     return {
         "category": "error",
-        "danger_potential": 1,
+        "danger_potential": 10,
         "safety_info": {
-            "isSafe": True,
-            "confidence": 0.5,
-            "reasoning": reason,
-            "flags": [],
+            "isSafe": False,
+            "confidence": 0.0,
+            "reasoning": f"AI analysis unavailable: {reason}. Content treated as unsafe pending re-check.",
+            "flags": ["analysis_failed"],
+            "version": SAFETY_PROMPT_VERSION,
         },
         "mode": "error",
         "ai_response": reason,

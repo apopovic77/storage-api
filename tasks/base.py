@@ -51,9 +51,37 @@ class BaseStorageTask(Task):
         self._cleanup_db_session()
 
     def on_failure(self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo) -> None:
-        """Called when task fails"""
+        """Called when task fails (after all retries exhausted)."""
         logger.error(f"❌ Task {self.name} failed (ID: {task_id}): {exc}")
         logger.debug(f"   Exception info: {einfo}")
+
+        # For AI-analysis tasks, mark the object as ai_safety_status='failed' so the
+        # /storage/media quarantine logic treats the asset as untrusted until a
+        # manual re-analysis succeeds. Fail-closed across the whole pipeline.
+        ai_task_names = (
+            "tasks.ai_analysis.process_safety_check_only",
+            "tasks.ai_analysis.process_vision_analysis_only",
+            "tasks.ai_analysis.process_image_analysis",
+            "tasks.ai_analysis.process_video_analysis",
+            "tasks.ai_analysis.process_text_analysis",
+        )
+        if self.name in ai_task_names and args:
+            try:
+                from models import StorageObject
+                object_id = args[0]
+                db = SessionLocal()
+                try:
+                    obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
+                    if obj is not None:
+                        obj.ai_safety_status = "failed"
+                        obj.ai_safety_error = (str(exc) or "AI task failed")[:500]
+                        db.commit()
+                        logger.info(f"   ↳ Marked object {object_id} ai_safety_status=failed")
+                finally:
+                    db.close()
+            except Exception as mark_exc:
+                logger.error(f"   ↳ Could not mark ai_safety_status=failed: {mark_exc}")
+
         self._cleanup_db_session()
 
     def on_retry(self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo) -> None:

@@ -16,6 +16,7 @@ sys.modules['sqlite3'] = __import__('pysqlite3')
 
 import asyncio
 import base64
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
@@ -27,6 +28,84 @@ from ai_analysis.service import analyze_content
 from knowledge_graph.pipeline import KnowledgeGraphPipeline
 
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_scratch_dir(scratch_path: str) -> None:
+    """
+    Remove the pre-processing scratch directory after a task finishes.
+
+    Called only on the success path — on failure we keep the inputs around
+    so retries can re-use them and humans can inspect what tripped the
+    classifier. Scratch lives outside /tmp to survive the nightly tmp cleanup,
+    but it is *not* meant to grow unbounded — every successful task purges
+    its own dir. Best-effort; never raises.
+    """
+    try:
+        p = Path(scratch_path)
+        # Only delete dirs we created (under AI_SCRATCH_DIR or /tmp/ai_*),
+        # never an arbitrary path that ended up in the queue.
+        name = p.name
+        if not (name.startswith("ai_thumbs_") or name.startswith("ai_images_")):
+            return
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.parent.name.startswith(("ai_thumbs_", "ai_images_")):
+            shutil.rmtree(p.parent, ignore_errors=True)
+    except Exception as e:
+        logger.warning(f"   ⚠️  Failed to cleanup scratch dir {scratch_path}: {e}")
+
+
+def _maybe_alert_unsafe(storage_obj, safety_info: dict, danger: int) -> None:
+    """
+    Fire a moderator alert when a high-confidence unsafe verdict comes in.
+
+    Trigger: isSafe=False AND confidence>=0.9 AND danger>=8 — tuned so routine
+    NSFW false-positives don't spam, but actual illegal/CSAM-grade hits do
+    page a human. Channel + threshold are env-configurable; webhook is a
+    POST with JSON body (works for Slack/Discord/Telegram bridges).
+
+    Best-effort, never raises. Failure to alert must not affect the task.
+    """
+    import os
+    import httpx as _httpx
+
+    if not safety_info or safety_info.get("isSafe") is not False:
+        return
+
+    confidence = float(safety_info.get("confidence") or 0)
+    min_conf = float(os.getenv("SAFETY_ALERT_MIN_CONFIDENCE", "0.9"))
+    min_danger = int(os.getenv("SAFETY_ALERT_MIN_DANGER", "8"))
+    if confidence < min_conf or (danger or 0) < min_danger:
+        return
+
+    webhook = os.getenv("SAFETY_ALERT_WEBHOOK", "").strip()
+    if not webhook:
+        # No webhook configured — fall back to structured log line so an
+        # operator scanning the journal can grep for these.
+        logger.error(
+            f"🚨 SAFETY_ALERT object_id={storage_obj.id} tenant={storage_obj.tenant_id} "
+            f"danger={danger} conf={confidence:.2f} flags={safety_info.get('flags')} "
+            f"reasoning={safety_info.get('reasoning')!r}"
+        )
+        return
+
+    payload = {
+        "event": "storage.safety.unsafe",
+        "object_id": storage_obj.id,
+        "tenant_id": storage_obj.tenant_id,
+        "original_filename": storage_obj.original_filename,
+        "owner_user_id": storage_obj.owner_user_id,
+        "ai_safety_rating": "unsafe",
+        "ai_danger_potential": danger,
+        "confidence": confidence,
+        "flags": safety_info.get("flags") or [],
+        "reasoning": safety_info.get("reasoning") or "",
+    }
+    try:
+        _httpx.post(webhook, json=payload, timeout=5.0)
+        logger.info(f"   🚨 Safety alert dispatched for object {storage_obj.id}")
+    except Exception as e:
+        logger.error(f"   ⚠️  Safety alert webhook failed: {e}")
 
 
 @app.task(base=BaseStorageTask, name='tasks.ai_analysis.process_safety_check_only')
@@ -55,8 +134,8 @@ def process_safety_check_only(object_id: int, image_path: str, filename: str) ->
             raise FileNotFoundError(f"Expected image.jpg in {image_path}")
 
     # Safety Check using Claude with image paths (fast with haiku model)
-    from ai_analysis.service import _run_safety_check_with_paths
-    context_info = f"Filename: {filename}"
+    from ai_analysis.service import _run_safety_check_with_paths, _sanitize_for_prompt
+    context_info = f"Filename: {_sanitize_for_prompt(filename, label='filename')}"
     result = asyncio.run(_run_safety_check_with_paths(
         image_paths=[str(img_path)],
         text_content=None,
@@ -83,8 +162,10 @@ def process_safety_check_only(object_id: int, image_path: str, filename: str) ->
     storage_obj.ai_safety_status = "completed"
 
     db.commit()
+    _maybe_alert_unsafe(storage_obj, result.get("safety_info") or {}, result.get("danger_potential") or 0)
     logger.info(f"   ✅ Safety check saved to database for object {object_id}")
 
+    _cleanup_scratch_dir(image_path)
     return {
         "object_id": object_id,
         "status": "safety_check_completed",
@@ -119,8 +200,8 @@ def process_vision_analysis_only(object_id: int, image_path: str, filename: str)
             raise FileNotFoundError(f"Expected image.jpg in {image_path}")
 
     # Full Vision Analysis using Claude with image paths (sonnet model)
-    from ai_analysis.service import _run_vision_analysis_with_paths
-    context_info = f"Filename: {filename}\nMedia type: image"
+    from ai_analysis.service import _run_vision_analysis_with_paths, _sanitize_for_prompt
+    context_info = f"Filename: {_sanitize_for_prompt(filename, label='filename')}\nMedia type: image"
 
     result = asyncio.run(_run_vision_analysis_with_paths(
         image_paths=[str(img_path)],
@@ -161,9 +242,11 @@ def process_vision_analysis_only(object_id: int, image_path: str, filename: str)
     storage_obj.ai_safety_status = "completed"
 
     db.commit()
+    _maybe_alert_unsafe(storage_obj, result.get("safety_info") or {}, result.get("danger_potential") or 0)
     logger.info(f"   ✅ Vision analysis saved to database for object {object_id}")
 
     # NO embedding generation!
+    _cleanup_scratch_dir(image_path)
 
     return {
         "object_id": object_id,
@@ -201,8 +284,8 @@ def process_image_analysis(object_id: int, image_path: str, filename: str) -> Di
         logger.debug(f"   Found image in directory: {img_path}")
 
     # Full Vision Analysis using Claude with image paths (sonnet model)
-    from ai_analysis.service import _run_vision_analysis_with_paths
-    context_info = f"Filename: {filename}\nMedia type: image"
+    from ai_analysis.service import _run_vision_analysis_with_paths, _sanitize_for_prompt
+    context_info = f"Filename: {_sanitize_for_prompt(filename, label='filename')}\nMedia type: image"
 
     result = asyncio.run(_run_vision_analysis_with_paths(
         image_paths=[str(img_path)],
@@ -244,10 +327,12 @@ def process_image_analysis(object_id: int, image_path: str, filename: str) -> Di
     storage_obj.ai_safety_status = "completed"
 
     db.commit()
+    _maybe_alert_unsafe(storage_obj, result.get("safety_info") or {}, result.get("danger_potential") or 0)
     logger.info(f"   ✅ Database updated for object {object_id}")
 
     # Trigger embedding generation (chained task)
     generate_embedding.delay(object_id)
+    _cleanup_scratch_dir(image_path)
 
     return {
         "object_id": object_id,
@@ -293,8 +378,13 @@ def process_video_analysis(object_id: int, thumb_dir: str, filename: str) -> Dic
     logger.info(f"   📸 Found {len(image_paths)}/5 screenshots, analyzing ALL frames with Claude...")
 
     # Video analysis using Claude with ALL frame paths (sonnet model for quality)
-    from ai_analysis.service import _run_vision_analysis_with_paths
-    context_info = f"Filename: {filename}\nMedia type: video\nAnalyzing {len(image_paths)} sampled frames from video\nCheck ALL frames for safety - if ANY frame is unsafe, mark as unsafe"
+    from ai_analysis.service import _run_vision_analysis_with_paths, _sanitize_for_prompt
+    context_info = (
+        f"Filename: {_sanitize_for_prompt(filename, label='filename')}\n"
+        f"Media type: video\n"
+        f"Analyzing {len(image_paths)} sampled frames from video\n"
+        f"Check ALL frames for safety - if ANY frame is unsafe, mark as unsafe"
+    )
 
     result = asyncio.run(_run_vision_analysis_with_paths(
         image_paths=image_paths,  # Pass ALL 5 frames!
@@ -336,10 +426,12 @@ def process_video_analysis(object_id: int, thumb_dir: str, filename: str) -> Dic
     storage_obj.ai_safety_status = "completed"
 
     db.commit()
+    _maybe_alert_unsafe(storage_obj, result.get("safety_info") or {}, result.get("danger_potential") or 0)
     logger.info(f"   ✅ Database updated for object {object_id}")
 
     # Trigger embedding generation
     generate_embedding.delay(object_id)
+    _cleanup_scratch_dir(thumb_dir)
 
     return {
         "object_id": object_id,
@@ -420,6 +512,7 @@ def process_text_analysis(object_id: int, file_path: str, filename: str) -> Dict
     storage_obj.ai_safety_status = "completed"
 
     db.commit()
+    _maybe_alert_unsafe(storage_obj, result.get("safety_info") or {}, result.get("danger_potential") or 0)
     logger.info(f"   ✅ Database updated for object {object_id}")
 
     # Trigger embedding generation

@@ -1377,6 +1377,9 @@ async def proxy_external_file(
     if not obj:
         raise HTTPException(status_code=404, detail="Storage object not found")
 
+    # Safety quarantine — same policy as /storage/media
+    _check_quarantine(obj, current_user)
+
     # Access control
     if not obj.is_public:
         if obj.owner_user_id != current_user.id and current_user.trust_level != "admin":
@@ -2798,15 +2801,23 @@ def head_media_variant(
     object_id: int,
     variant: Optional[str] = Query(None, description="thumbnail | medium | full"),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """
     Lightweight HEAD handler so clients (e.g., Unity/AVFoundation) can probe media files.
     Unity's VideoPlayer sends a HEAD request before streaming; without this we return 405,
     which causes AVFoundation to believe the file is invalid/no video tracks.
+
+    NOTE: In production this handler is usually shadowed by the HEAD intercept
+    middleware in main.py (which adds X-HLS-URL etc.). Kept as fallback for
+    cases where the middleware is bypassed (e.g. internal direct hits).
     """
     obj = db.query(StorageObject).filter(StorageObject.id == object_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="Not found")
+
+    # Safety gate — same policy as GET. 451 instead of 200 for blocked content.
+    _check_quarantine(obj, current_user)
 
     # Re-use original resolver so we report actual file details.
     # For HEAD it is enough to resolve the source path without heavy processing.
@@ -2826,6 +2837,66 @@ def head_media_variant(
 
     # Starlette will strip the body for HEAD responses automatically.
     return Response(status_code=200, headers=headers)
+
+
+# Danger-Level ≥ this triggers the public quarantine. Configurable so a tenant
+# with stricter compliance can ship a tighter policy without redeploying.
+QUARANTINE_DANGER_THRESHOLD = int(os.getenv("QUARANTINE_DANGER_THRESHOLD", "7"))
+
+
+def _check_quarantine(obj, current_user: Optional[User]) -> None:
+    """
+    Block public delivery of an asset whose AI safety verdict is unsafe, failed,
+    or still pending. Raises HTTPException(451 Unavailable For Legal Reasons)
+    for non-owner, non-admin requesters. Returns silently if access is allowed.
+
+    Bypass rules:
+      - Admins (`trust_level == "admin"`) always pass.
+      - Owners (`owner_user_id == current_user.id`) always pass — they need to
+        be able to download / delete their own flagged content.
+      - Anonymous and non-owner authenticated users get blocked.
+
+    Trigger conditions (any one is enough):
+      - `ai_safety_rating == "unsafe"` AND `ai_danger_potential >= threshold`
+      - `is_public == True` AND `ai_safety_status` in {"pending", "processing",
+        "failed"} — closes the upload→AI-completion race window and the
+        AI-error fail-closed path.
+
+    NULL `ai_safety_status` (legacy objects, no AI ever queued) does NOT trip
+    the gate — we don't retroactively block 175 historical videos that pre-date
+    the transcoder.
+    """
+    if obj is None:
+        return
+    # Owner / admin bypass
+    if current_user is not None:
+        if getattr(current_user, "trust_level", None) == "admin":
+            return
+        if getattr(obj, "owner_user_id", None) == current_user.id:
+            return
+
+    danger = obj.ai_danger_potential or 0
+    if obj.ai_safety_rating == "unsafe" and danger >= QUARANTINE_DANGER_THRESHOLD:
+        raise HTTPException(
+            status_code=451,
+            detail={
+                "error": "Content blocked by safety policy",
+                "ai_safety_rating": obj.ai_safety_rating,
+                "ai_danger_potential": danger,
+                "code": "safety_blocked",
+            },
+        )
+
+    # Public asset with an analysis that hasn't completed (or failed) → block
+    if obj.is_public and obj.ai_safety_status in ("pending", "processing", "failed"):
+        raise HTTPException(
+            status_code=451,
+            detail={
+                "error": "Content unavailable: AI safety check in progress or failed",
+                "ai_safety_status": obj.ai_safety_status,
+                "code": "safety_pending",
+            },
+        )
 
 
 @router.get("/media/{object_id}")
@@ -2877,6 +2948,9 @@ def get_media_variant(
 
     if not obj:
         raise HTTPException(status_code=404, detail="Not found")
+
+    # Safety gate (raises 451 if blocked, bypassed for owner/admin)
+    _check_quarantine(obj, current_user)
 
     media_type_current = (obj.mime_type or "application/octet-stream")
     mime = media_type_current.lower()
@@ -4029,7 +4103,10 @@ def download_file(
     
     if not obj:
         raise HTTPException(status_code=404, detail="Not found")
-    
+
+    # Safety quarantine
+    _check_quarantine(obj, current_user)
+
     # Check permissions
     if not obj.is_public:
         if not current_user:
@@ -4304,11 +4381,34 @@ async def update_object_metadata(
     # Check if ai_context_metadata is being updated
     ai_metadata_updated = "ai_context_metadata" in update_data
 
+    # Track is_public flip from False/None → True. If safety analysis wasn't
+    # completed before, we must re-queue it now so the quarantine gate can
+    # actually evaluate the content. Otherwise the toggle would expose
+    # `is_public=True` objects with stale or absent safety metadata.
+    going_public = (
+        "is_public" in update_data
+        and bool(update_data["is_public"])
+        and not bool(obj.is_public)
+    )
+    needs_safety_recheck = going_public and obj.ai_safety_status != "completed"
+
     for key, value in update_data.items():
         setattr(obj, key, value)
 
+    if needs_safety_recheck:
+        # Force the quarantine gate to block until the new analysis completes.
+        obj.ai_safety_status = "pending"
+
     db.commit()
     db.refresh(obj)
+
+    if needs_safety_recheck:
+        try:
+            from storage.service import enqueue_ai_safety_and_transcoding
+            print(f"🛡️ PATCH is_public→True triggered safety re-check for object {obj.id}")
+            await enqueue_ai_safety_and_transcoding(obj, db=db, ai_mode="safety")
+        except Exception as e:
+            print(f"⚠️ PATCH safety re-check enqueue failed for {obj.id}: {e}")
 
     # CRITICAL: Trigger Knowledge Graph Pipeline if AI metadata was updated
     # This ensures async worker path creates embeddings and extracts images
@@ -4514,8 +4614,26 @@ async def replace_file(
     data = await file.read()
     updated_obj = await update_file_and_record(db, storage_obj=obj, data=data)
     updated_obj.original_filename = file.filename or updated_obj.original_filename
+
+    # File content has changed → existing safety verdict is no longer valid.
+    # Reset to "pending" so the quarantine logic treats the asset as untrusted
+    # until the freshly-enqueued analysis completes. Without this, a caller
+    # could upload a safe image, get past safety, then PUT-replace with unsafe.
+    updated_obj.ai_safety_rating = None
+    updated_obj.ai_safety_status = "pending"
+    updated_obj.safety_info = None
+    updated_obj.ai_danger_potential = None
     db.commit()
     db.refresh(updated_obj)
+
+    # Re-enqueue AI safety + transcoding for the new bytes. Default ai_mode is
+    # 'safety' (cheap haiku check) — callers wanting deeper analysis must use
+    # /storage/objects/{id}/analyze explicitly afterwards.
+    try:
+        from storage.service import enqueue_ai_safety_and_transcoding
+        await enqueue_ai_safety_and_transcoding(updated_obj, db=db, ai_mode="safety")
+    except Exception as e:
+        print(f"⚠️ PUT /files re-enqueue failed for {updated_obj.id}: {e}")
 
     # Auto-trigger AI analysis for CSV files to enable differential updates
     if updated_obj.mime_type and ("csv" in updated_obj.mime_type.lower() or "text/plain" in updated_obj.mime_type.lower()):
@@ -4964,9 +5082,12 @@ async def get_object_data_uri(
         StorageObject.id == object_id,
         StorageObject.is_public == True
     ).first()
-    
+
     if not obj:
         raise HTTPException(status_code=404, detail="Public object not found")
+
+    # Anonymous-only endpoint (no auth) → strict policy: even pending pubs blocked
+    _check_quarantine(obj, current_user=None)
     
     if not obj.external_uri:
         raise HTTPException(status_code=400, detail="Object has no external URI")

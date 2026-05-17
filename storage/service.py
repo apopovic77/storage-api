@@ -728,25 +728,79 @@ async def load_image_bytes_for_analysis(
         return out_buffer.getvalue(), mime_out, trim_meta
 
 
-def extract_thumbnails_for_ai(video_path: Path, output_dir: Path) -> int:
-    """Extracts 5 thumbnails for AI analysis."""
+def extract_thumbnails_for_ai(video_path: Path, output_dir: Path, n_frames: int = 5) -> int:
+    """
+    Extract `n_frames` thumbnails uniformly spaced across the FULL video duration
+    for AI safety analysis. The previous implementation used `-vf fps=2 -vframes 5`
+    which only sampled the first ~2.5 seconds — a 10-minute video with unsafe
+    content in the middle was effectively invisible to the safety check.
+
+    Strategy:
+      1. ffprobe the duration.
+      2. Sample at timestamps `D * (i + 0.5) / n` for i in 0..n-1 → frames at
+         10%, 30%, 50%, 70%, 90% of the video (for n=5). Avoids cold-opens and
+         end-credits while covering the body of the video.
+      3. Each frame extracted with `-ss <ts> -frames:v 1`, scaled to 1280x720,
+         saved as JPEG.
+
+    Falls back to the old "first frames" strategy if ffprobe fails (very short
+    or malformed videos).
+
+    Returns 0 on success (at least one frame written), non-zero on total failure.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Use fps filter for better compatibility
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(video_path),
-        "-vf",
-        "fps=2",
-        "-vframes",
-        "5",
-        "-s",
-        "1280x720",
-        str(output_dir / "thumb_%02d.jpg"),
-    ]
-    result = subprocess.run(cmd, capture_output=True)
-    return result.returncode
+    n_frames = max(1, n_frames)
+
+    # Probe duration
+    duration_s = 0.0
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if probe.returncode == 0 and probe.stdout.strip():
+            duration_s = float(probe.stdout.strip())
+    except Exception:
+        duration_s = 0.0
+
+    # Very short / unknown duration → fall back to first-frames sampling
+    if duration_s < 1.0:
+        cmd = [
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-vf", "fps=2",
+            "-vframes", str(n_frames),
+            "-s", "1280x720",
+            str(output_dir / "thumb_%02d.jpg"),
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        return result.returncode
+
+    # Uniform sampling across full duration
+    timestamps = [duration_s * (i + 0.5) / n_frames for i in range(n_frames)]
+    written = 0
+    for idx, ts in enumerate(timestamps, start=1):
+        out_path = output_dir / f"thumb_{idx:02d}.jpg"
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", f"{ts:.3f}",
+            "-i", str(video_path),
+            "-frames:v", "1",
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+            "-q:v", "2",
+            str(out_path),
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=30)
+            if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+                written += 1
+        except subprocess.TimeoutExpired:
+            continue
+    return 0 if written > 0 else 1
 
 
 def validate_and_extract_hls_zip(zip_path: Path, extract_dir: Path) -> dict:
@@ -1077,6 +1131,15 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
         skip_ai_safety: Legacy parameter, use ai_mode="none" instead
         ai_mode: AI analysis mode (none, safety, vision, full)
     """
+    # Pre-processing scratch dir: NOT in /tmp — the nightly cleanup_tmp.sh
+    # cron wipes /tmp at midnight and would corrupt in-flight Celery tasks
+    # whose retries can stretch over hours. Keep alongside other storage data.
+    _AI_SCRATCH_ROOT = Path(os.getenv("AI_SCRATCH_DIR", "/var/lib/storage-api/tmp-ai"))
+    try:
+        _AI_SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Fallback to /tmp if we can't create the persistent dir (e.g. read-only fs in tests)
+        _AI_SCRATCH_ROOT = Path("/tmp")
     import logging
     logger = logging.getLogger(__name__)
     logger.error(f"🔥 enqueue_ai_safety_and_transcoding CALLED for storage object {storage_obj.id}")
@@ -1172,6 +1235,27 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
 
         # === CELERY TASK QUEUE (v3 - Production Ready) ===
         # Replaced file-based queue with Redis + Celery
+        # Mark the storage object as ai_safety_status="pending" the moment we
+        # enqueue a task. This closes the upload→AI race: the /storage/media
+        # quarantine gate sees "pending" for public objects and returns 451
+        # until the Celery worker writes "completed". Without this step the
+        # asset would be downloadable for the (potentially minutes-long)
+        # window between upload-200 and AI verdict.
+        if ai_mode != "none":
+            try:
+                from database import SessionLocal as _SL
+                from models import StorageObject as _SO
+                _pending_db = _SL()
+                try:
+                    _pending_obj = _pending_db.query(_SO).filter(_SO.id == storage_obj.id).first()
+                    if _pending_obj is not None and _pending_obj.ai_safety_status != "completed":
+                        _pending_obj.ai_safety_status = "pending"
+                        _pending_db.commit()
+                finally:
+                    _pending_db.close()
+            except Exception as _pending_exc:
+                print(f"⚠️ Could not mark ai_safety_status=pending: {_pending_exc}")
+
         def _enqueue_ai_task(object_id: int, task_type: str, content_path: str, filename: str, ai_mode: str = "full") -> None:
             """
             Enqueue AI analysis task to Celery
@@ -1293,7 +1377,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
                     if ts_files:
                         # Create a temporary video from first .ts segment for thumbnail extraction
                         first_ts = hls_extract_dir / ts_files[0]
-                        ai_thumb_dir = Path(f"/tmp/ai_thumbs_{storage_obj.id}")
+                        ai_thumb_dir = _AI_SCRATCH_ROOT / f"ai_thumbs_{storage_obj.id}"
                         result_code = extract_thumbnails_for_ai(first_ts, ai_thumb_dir)
                         
                         if result_code != 0:
@@ -1323,7 +1407,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
             else:
                 # Regular video processing: optionally enqueue AI analysis, then handle transcoding
                 if ai_mode != "none":
-                    ai_thumb_dir = Path(f"/tmp/ai_thumbs_{storage_obj.id}")
+                    ai_thumb_dir = _AI_SCRATCH_ROOT / f"ai_thumbs_{storage_obj.id}"
                     result_code = extract_thumbnails_for_ai(file_path, ai_thumb_dir)
                     if result_code != 0:
                         print(f"!!! WARNING: ffmpeg thumbnail extraction failed with code {result_code} for {file_path}")
@@ -1383,7 +1467,7 @@ async def enqueue_ai_safety_and_transcoding(storage_obj, db=None, skip_ai_safety
         elif storage_obj.mime_type and storage_obj.mime_type.startswith("image/"):
             # Image processing - resize and optimize for AI safety analysis
             if ai_mode != "none":
-                ai_image_dir = Path(f"/tmp/ai_images_{storage_obj.id}")
+                ai_image_dir = _AI_SCRATCH_ROOT / f"ai_images_{storage_obj.id}"
                 ai_image_dir.mkdir(parents=True, exist_ok=True)
                 
                 # Resize image to max 1280x1280 for AI analysis (saves bandwidth/costs)

@@ -24,6 +24,7 @@ logging.basicConfig(
 logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
+import os
 import re
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -109,6 +110,23 @@ async def storage_media_head_headers(request: Request, call_next):
                 db.close()
             if not obj:
                 return Response(status_code=404, headers=_apply_cors_for_head({}, request))
+
+            # Safety quarantine — mirror /storage/media GET behavior.
+            # We don't have a current_user in middleware (auth happens in
+            # the route handler), so HEAD from anonymous origins always
+            # gets the public-only quarantine policy. Owner/admin clients
+            # can still GET (auth via X-API-KEY in the route handler) and
+            # will see the actual file.
+            danger = obj.ai_danger_potential or 0
+            threshold = int(os.getenv("QUARANTINE_DANGER_THRESHOLD", "7"))
+            is_unsafe_blocked = (obj.ai_safety_rating == "unsafe" and danger >= threshold)
+            is_pending_public = (obj.is_public and obj.ai_safety_status in ("pending", "processing", "failed"))
+            if is_unsafe_blocked or is_pending_public:
+                quarantine_headers = _apply_cors_for_head({}, request)
+                if obj.ai_safety_status:
+                    quarantine_headers["X-Transcoding-Status"] = obj.ai_safety_status
+                return Response(status_code=451, headers=quarantine_headers)
+
             headers = {"Content-Disposition": "inline", "Accept-Ranges": "bytes"}
             if obj.mime_type:
                 headers["X-Mime-Type"] = obj.mime_type
