@@ -54,14 +54,19 @@ API_BASE_URL = os.getenv("AI_API_BASE_URL", "http://127.0.0.1:8000")
 SAFETY_MODEL = os.getenv("SAFETY_MODEL", "haiku")  # Fast Claude model for safety checks
 ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "sonnet")  # Pro Claude model for full analysis
 
-# Backend selection for image-safety analysis.
-# - "gemini" (default): POST /ai/gemini/vision — base64 images in body.
-#   Used because gemini-2.0-flash is fast, has working auth, and produces
-#   stable JSON for the safety prompt.
-# - "claude": POST /ai/claude?model={SAFETY_MODEL} — local paths in body.
-#   Requires `claude -p` CLI auth to be valid on the host (currently broken
-#   on multiple servers — kept as fallback for when auth is refreshed).
-SAFETY_BACKEND = os.getenv("SAFETY_BACKEND", "gemini").lower()
+# Backend selection for image-safety analysis. All three accept image paths
+# (local FS) and the same SAFETY_PROMPT, but differ in auth + cost:
+#
+# - "chatgpt" (default): POST /ai/chatgpt — Codex CLI in exec mode.
+#   Uses the logged-in ChatGPT subscription (no per-call API billing),
+#   supports `-i <path>` natively, returns agent_message JSON. This is
+#   the cost-free path when a ChatGPT-Plus/Pro subscription is logged in.
+# - "gemini": POST /ai/gemini — falls back to Vision API for image_paths
+#   (the CLI is workspace-restricted). Pay-per-call via Google Cloud.
+# - "claude": POST /ai/claude?model={SAFETY_MODEL} — Claude CLI; requires
+#   valid OAuth on the host. Currently broken on several servers, kept as
+#   fallback once auth is refreshed.
+SAFETY_BACKEND = os.getenv("SAFETY_BACKEND", "chatgpt").lower()
 ANALYSIS_BACKEND = os.getenv("ANALYSIS_BACKEND", SAFETY_BACKEND).lower()
 
 # CSV Chunking configuration
@@ -114,48 +119,79 @@ async def _call_gemini_with_images(
     timeout: float = 120.0,
 ) -> str:
     """
-    Call /ai/gemini/vision with local images encoded as base64.
+    Call the unified `/ai/gemini` endpoint with local image paths.
 
-    Gemini's endpoint takes inline-base64 images in `prompt.images[]`, not file
-    paths. We read each path off disk, encode, and POST as PromptText. The
-    response shape is `{"response": "...", "model": "...", ...}` and we return
-    `response` directly — the safety prompt asks for strict JSON so the caller
-    can `json.loads()` the result.
+    `/ai/gemini` is the same endpoint that backs text-only prompts (where it
+    runs the free-tier `gemini` CLI). When `image_paths` are provided, the
+    endpoint internally routes to the Vision API since the CLI is text-only.
+    We pass paths — NOT base64 — so the API server can read them locally
+    on whichever host it runs on. This matches the Claude integration shape
+    and keeps payloads small.
 
-    Why this is the safety default (vs. Claude): the Gemini CLI auth works in
-    the deployed environment, while the Claude CLI on multiple servers
-    currently fails with 401. The actual classification quality is comparable
-    for the safety prompt because both models read the same instructions.
+    Why Gemini is the default safety backend: Gemini auth works in the
+    deployed environment (GOOGLE_API_KEY env), while Claude CLI auth is
+    interactive (`claude /login`) and was expired on multiple hosts. Once
+    Claude auth is refreshed, set SAFETY_BACKEND=claude to switch back.
 
     Args:
         prompt: The text prompt (already formatted with context_info).
-        image_paths: Local file paths — the function reads + base64-encodes them.
+        image_paths: Local file paths the api-ai server can read.
         timeout: Request timeout in seconds.
 
     Returns:
-        Raw response text from Gemini (typically JSON per the safety prompt).
+        Raw response text from Gemini — the safety prompt asks for strict
+        JSON, so the caller can `json.loads()` directly.
     """
-    images_b64: List[str] = []
-    for p in image_paths:
-        try:
-            with open(p, "rb") as fh:
-                images_b64.append(base64.b64encode(fh.read()).decode("ascii"))
-        except FileNotFoundError:
-            # A missing pre-process file is a hard failure — propagate so the
-            # Celery autoretry layer picks it up and ultimately marks the
-            # storage object ai_safety_status='failed' (fail-closed).
-            raise
-
-    payload = {"prompt": {"text": prompt, "images": images_b64}}
+    payload = {
+        "prompt": prompt,            # str — endpoint accepts either str or PromptText
+        "image_paths": image_paths,  # local paths; endpoint validates existence
+    }
     headers = {"X-API-KEY": INTERNAL_API_KEY, "Content-Type": "application/json"}
-    url = f"{API_BASE_URL}/ai/gemini/vision"
+    url = f"{API_BASE_URL}/ai/gemini"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         body = response.json()
-        # Endpoint returns under both "response" and "message" — prefer "response",
-        # fall back to "message" for forward-compat with future api-ai versions.
+        # Endpoint returns the model output under either "response" or "message".
+        return body.get("response") or body.get("message") or ""
+
+
+async def _call_chatgpt_with_images(
+    prompt: str,
+    image_paths: List[str],
+    timeout: float = 120.0,
+) -> str:
+    """
+    Call /ai/chatgpt which runs the Codex CLI (`codex exec --json -i <path>`)
+    under the hood. Uses the logged-in ChatGPT subscription — no per-call
+    API charges. The CLI is the cost-free path of the three available
+    backends (vs. Gemini Vision API and Claude API which bill per token).
+
+    Codex CLI 0.130+ supports multiple `-i` flags for images natively and
+    has no workspace restriction; the api-ai service must have its PATH
+    pointing at the v0.130+ binary (the older /usr/local/bin/codex v0.63
+    has broken auth).
+
+    Args:
+        prompt: The text prompt (already includes context_info).
+        image_paths: Local file paths the api-ai server can read.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        Raw response text — typically the JSON the safety prompt requested.
+    """
+    payload = {
+        "prompt": prompt,
+        "image_paths": image_paths,
+    }
+    headers = {"X-API-KEY": INTERNAL_API_KEY, "Content-Type": "application/json"}
+    url = f"{API_BASE_URL}/ai/chatgpt"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        body = response.json()
         return body.get("response") or body.get("message") or ""
 
 
@@ -172,7 +208,13 @@ async def _call_ai_with_images(
     Centralises the backend switch so SAFETY_BACKEND / ANALYSIS_BACKEND only
     need to be checked once.
     """
-    b = (backend or "gemini").lower()
+    b = (backend or "chatgpt").lower()
+    if b in ("chatgpt", "codex", "openai"):
+        return await _call_chatgpt_with_images(
+            prompt=prompt,
+            image_paths=image_paths,
+            timeout=timeout,
+        )
     if b == "claude":
         return await _call_claude_with_images(
             prompt=prompt,
@@ -186,7 +228,9 @@ async def _call_ai_with_images(
             image_paths=image_paths,
             timeout=timeout,
         )
-    raise ValueError(f"Unknown AI backend: {backend!r}. Use 'gemini' or 'claude'.")
+    raise ValueError(
+        f"Unknown AI backend: {backend!r}. Use 'chatgpt', 'gemini' or 'claude'."
+    )
 
 
 def extract_excel_as_text(data: bytes, mime_type: str) -> str:
