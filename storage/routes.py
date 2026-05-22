@@ -2843,6 +2843,14 @@ def head_media_variant(
 # with stricter compliance can ship a tighter policy without redeploying.
 QUARANTINE_DANGER_THRESHOLD = int(os.getenv("QUARANTINE_DANGER_THRESHOLD", "7"))
 
+# Global opt-in: when true, NULL ai_safety_status also blocks public delivery
+# (image/video only, to avoid bricking 3D models / audio / markup that
+# intentionally skip the safety pipeline). Default false for backward
+# compatibility with hosts that have a large legacy backfill of unanalyzed
+# public assets (e.g. arkturian had ~7k images NULL before the redis-auth
+# fix). Operators can enable per-host once their backfill is complete.
+STRICT_PUBLIC_NULL_SAFETY = os.getenv("STRICT_PUBLIC_NULL_SAFETY", "false").lower() in ("1", "true", "yes")
+
 
 def _check_quarantine(obj, current_user: Optional[User]) -> None:
     """
@@ -2861,10 +2869,19 @@ def _check_quarantine(obj, current_user: Optional[User]) -> None:
       - `is_public == True` AND `ai_safety_status` in {"pending", "processing",
         "failed"} — closes the upload→AI-completion race window and the
         AI-error fail-closed path.
+      - `metadata_json.requires_safety_verdict == True` (per-object opt-in)
+        AND `ai_safety_status != "completed"` — for callers that need
+        strict-deny semantics (e.g. anonymous user submissions). NULL status
+        blocks under this flag.
+      - Global env `STRICT_PUBLIC_NULL_SAFETY=true` AND `is_public == True`
+        AND `ai_safety_status is None` AND mime is image/* or video/* — opt-in
+        host-wide enforcement once legacy NULLs have been backfilled. 3D
+        models, audio, markup etc. that intentionally skip AI are unaffected
+        because their mime doesn't match the image/video filter.
 
-    NULL `ai_safety_status` (legacy objects, no AI ever queued) does NOT trip
-    the gate — we don't retroactively block 175 historical videos that pre-date
-    the transcoder.
+    Without either opt-in, NULL `ai_safety_status` (legacy objects, no AI ever
+    queued) does NOT trip the gate — we don't retroactively block historical
+    assets that pre-date the safety pipeline.
     """
     if obj is None:
         return
@@ -2897,6 +2914,41 @@ def _check_quarantine(obj, current_user: Optional[User]) -> None:
                 "code": "safety_pending",
             },
         )
+
+    # Per-object opt-in: caller marked the upload as requiring a verdict
+    # before public delivery (anonymous user submissions, regulated content,
+    # etc.). Anything other than 'completed' blocks — including NULL, which
+    # closes the upload→pending-flag race window.
+    requires_verdict = False
+    md = getattr(obj, "metadata_json", None)
+    if isinstance(md, dict):
+        requires_verdict = bool(md.get("requires_safety_verdict"))
+    if requires_verdict and obj.ai_safety_status != "completed":
+        raise HTTPException(
+            status_code=451,
+            detail={
+                "error": "Content unavailable: safety verdict required before public delivery",
+                "ai_safety_status": obj.ai_safety_status or "missing",
+                "code": "safety_required",
+            },
+        )
+
+    # Global opt-in: strict-deny NULL on public images/videos
+    if (
+        STRICT_PUBLIC_NULL_SAFETY
+        and obj.is_public
+        and obj.ai_safety_status is None
+    ):
+        mime = (obj.mime_type or "").lower()
+        if mime.startswith("image/") or mime.startswith("video/"):
+            raise HTTPException(
+                status_code=451,
+                detail={
+                    "error": "Content unavailable: safety verdict missing",
+                    "ai_safety_status": "missing",
+                    "code": "safety_missing",
+                },
+            )
 
 
 @router.get("/media/{object_id}")
