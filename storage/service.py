@@ -313,9 +313,15 @@ class GenericStorageService:
         filename = self._create_filename(original_filename, owner_user_id, context)
         tenant_media_dir = self._get_tenant_dir(self.media_dir, tenant_id)
         file_path = tenant_media_dir / filename
-        
+
         async with aiofiles.open(file_path, "wb") as f:
             await f.write(data)
+
+        # Audio MIME reconciliation: clients (browser recorders, mobile apps)
+        # often mislabel audio uploads — e.g. claim audio/mpeg for what is
+        # actually WAV or WebM/Opus. ffprobe the real container and snap to
+        # canonical MIME so downstream consumers route correctly.
+        mime = reconcile_audio_mime(file_path, mime, original_filename)
 
         checksum = self._checksum(data)
         metadata = await self._extract_metadata(file_path, mime, tenant_id)
@@ -372,6 +378,9 @@ class GenericStorageService:
             # Write temporary file
             async with aiofiles.open(temp_file_path, "wb") as f:
                 await f.write(data)
+
+            # Reconcile audio MIME against ffprobe (same as save()).
+            mime = reconcile_audio_mime(temp_file_path, mime, original_filename)
 
             # Extract metadata and generate thumbnails/variants
             metadata = await self._extract_metadata(temp_file_path, mime, tenant_id)
@@ -912,7 +921,7 @@ def _is_audio_only_webm_helper(file_path: Path) -> bool:
             "ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
             "-of", "csv=p=0", str(file_path)
         ], capture_output=True, text=True, timeout=10)
-        
+
         if result.returncode == 0:
             streams = result.stdout.strip().split('\n')
             # Check if all streams are audio and none are video
@@ -927,6 +936,117 @@ def _is_audio_only_webm_helper(file_path: Path) -> bool:
     except Exception as e:
         print(f"!!! WARNING: Failed to check WebM stream types: {e}")
         return False
+
+
+# Map (ffprobe format_name, first-audio-codec) to canonical MIME.
+# format_name comes back comma-separated when the container is ambiguous
+# (e.g. "mov,mp4,m4a,3gp,3g2,mj2") — we treat the set as fingerprint.
+def _canonical_audio_mime(format_name: str, audio_codec: Optional[str]) -> Optional[str]:
+    fmt = {p.strip() for p in (format_name or "").split(",") if p.strip()}
+    codec = (audio_codec or "").lower()
+
+    if "mp3" in fmt:
+        return "audio/mpeg"
+    if "wav" in fmt:
+        return "audio/wav"
+    if "flac" in fmt:
+        return "audio/flac"
+    if "aac" in fmt:
+        return "audio/aac"
+    if fmt & {"matroska", "webm"}:
+        return "audio/webm"
+    if "ogg" in fmt:
+        if codec == "opus":
+            return "audio/opus"
+        return "audio/ogg"
+    if fmt & {"mp4", "m4a", "mov", "3gp", "3g2", "mj2"}:
+        # MP4 family; codec disambiguates
+        if codec == "alac":
+            return "audio/mp4"
+        return "audio/mp4"  # AAC inside m4a/mp4 is audio/mp4 per RFC 4337
+    return None
+
+
+def _detect_true_audio_mime(file_path: Path) -> Optional[str]:
+    """
+    Run ffprobe and return the canonical audio MIME based on container +
+    audio codec. Returns None if the file is not audio-only (has video
+    streams) or if ffprobe fails — caller keeps the claimed MIME.
+
+    Catches the case where a client mislabels an upload (e.g. claims
+    audio/mpeg but the bytes are actually WAV or WebM-Opus from a browser
+    recorder). Auto-correction at upload time keeps downstream consumers
+    (transcoder, AI analyzer, MIME-based routing) consistent.
+    """
+    try:
+        result = subprocess.run([
+            "ffprobe", "-v", "error",
+            "-print_format", "json",
+            "-show_format", "-show_streams",
+            str(file_path),
+        ], capture_output=True, text=True, timeout=15)
+        if result.returncode != 0 or not result.stdout:
+            return None
+        data = json.loads(result.stdout)
+    except Exception as e:
+        print(f"⚠️  ffprobe failed for audio MIME detection on {file_path}: {e}")
+        return None
+
+    streams = data.get("streams") or []
+    # Reject anything with a video stream — that's a video file, not audio
+    if any(s.get("codec_type") == "video" for s in streams):
+        return None
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    if not audio_streams:
+        return None
+    first_codec = audio_streams[0].get("codec_name")
+    format_name = (data.get("format") or {}).get("format_name") or ""
+    return _canonical_audio_mime(format_name, first_codec)
+
+
+# Extensions / declared MIMEs that should be cross-checked against the
+# actual file bytes via ffprobe. Anything outside this set is left
+# untouched (we don't want to ffprobe every image / 3D / doc upload).
+_AUDIO_EXTENSIONS = {
+    ".mp3", ".m4a", ".mp4a", ".aac", ".wav", ".wave",
+    ".ogg", ".opus", ".oga", ".flac", ".webm",
+}
+
+
+def _claims_audio(claimed_mime: Optional[str], original_filename: Optional[str]) -> bool:
+    if claimed_mime and claimed_mime.lower().startswith("audio/"):
+        return True
+    if original_filename:
+        ext = Path(original_filename).suffix.lower()
+        if ext in _AUDIO_EXTENSIONS:
+            return True
+    return False
+
+
+def reconcile_audio_mime(
+    file_path: Path,
+    claimed_mime: Optional[str],
+    original_filename: Optional[str],
+) -> str:
+    """
+    If the upload looks like audio (caller mime is audio/* or extension is
+    a known audio type), verify against ffprobe and return the canonical
+    MIME. Falls back to claimed_mime when ffprobe is inconclusive or the
+    file is not audio.
+
+    Use this in upload paths AFTER the file is written to disk.
+    """
+    fallback = claimed_mime or "application/octet-stream"
+    if not _claims_audio(claimed_mime, original_filename):
+        return fallback
+    detected = _detect_true_audio_mime(file_path)
+    if detected and detected != claimed_mime:
+        print(
+            f"🎵 audio MIME corrected: claimed={claimed_mime!r} "
+            f"detected={detected!r} file={file_path.name}"
+        )
+        return detected
+    return fallback
 
 
 def bulk_delete_objects(
