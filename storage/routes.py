@@ -4284,7 +4284,46 @@ def _perform_delete(object_id: int, db: Session, owner_user_id: int, is_admin: b
         generic_storage.delete(obj.object_key, obj.tenant_id)
     db.delete(obj)
     db.commit()
+
+    # Cross-service ref cleanup: notify artrack-api so it can sweep its
+    # denormalized storage refs (media_files, waypoint metadata, track JSON
+    # lists). Without this, artrack waypoints end up with dangling 100822-
+    # style refs that surface as 404s in consuming apps. Fire-and-forget on
+    # a thread so the storage delete returns immediately and isn't blocked
+    # by artrack downtime — worst case artrack stays out-of-sync until
+    # someone runs the manual cleanup script.
+    _notify_artrack_storage_deleted(object_id)
+
     return {"message": "deleted", "cascade_deleted": len(linked_children) if linked_children else 0}
+
+
+def _notify_artrack_storage_deleted(object_id: int) -> None:
+    """POST to artrack-api's cascade-cleanup endpoint. Non-blocking, best-effort."""
+    import os
+    import threading
+    import urllib.request
+    import json as _json
+
+    artrack_url = os.getenv("ARTRACK_API_URL", "https://api-artrack.arkturian.com")
+    api_key = os.getenv("ARTRACK_API_KEY") or os.getenv("X_API_KEY") or "Inetpass1"
+    url = f"{artrack_url}/admin/storage/{object_id}/cleanup-refs"
+
+    def _fire():
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"")
+            req.add_header("X-API-KEY", api_key)
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                resp = _json.loads(r.read())
+                summary = resp.get("refs_cleaned", {})
+                total = sum(v for v in summary.values() if isinstance(v, int))
+                if total:
+                    print(f"🔁 artrack ref-cleanup for {object_id}: {summary}")
+        except Exception as e:  # noqa: BLE001
+            # Non-fatal — log and move on. Manual cleanup script still works.
+            print(f"⚠️  artrack ref-cleanup notification failed for {object_id}: {e}")
+
+    threading.Thread(target=_fire, daemon=True, name=f"artrack-cleanup-{object_id}").start()
 
 
 def _clean_tenant_objects(
