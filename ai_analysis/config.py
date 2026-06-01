@@ -31,12 +31,18 @@ class AIConfig:
         # Analysis mode
         self.mode = AIAnalysisMode(os.getenv("AI_ANALYSIS_MODE", "unified"))
 
-        # Model selection
-        self.safety_model = os.getenv("SAFETY_MODEL", "gemini-pro")
-        self.embedding_model = os.getenv("EMBEDDING_MODEL", "gemini-pro")
-
-        # Unified mode uses single model (Pro for better complex data analysis)
-        self.unified_model = os.getenv("UNIFIED_MODEL", "gemini-pro")
+        # Model selection.
+        # NOTE: these strings are descriptive labels only (used for logging /
+        # metadata, see _analyze_split_mode); the actual call routing is decided
+        # by SAFETY_BACKEND / ANALYSIS_BACKEND in ai_analysis.service. The default
+        # must NOT name a Google model — per project policy Gemini may only run
+        # via CLI subprocess, never via the billable API/SDK. Defaulting to a
+        # "gemini-*" label here was a latent footgun (it implied a Google path
+        # even though the .env overrode it). Align the fallback with the chatgpt
+        # backend default established in fd3eee3.
+        self.safety_model = os.getenv("SAFETY_MODEL", "chatgpt")
+        self.embedding_model = os.getenv("EMBEDDING_MODEL", "chatgpt")
+        self.unified_model = os.getenv("UNIFIED_MODEL", "chatgpt")
 
     def is_unified(self) -> bool:
         """Check if running in unified mode"""
