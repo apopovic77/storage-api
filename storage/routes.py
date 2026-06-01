@@ -3153,6 +3153,11 @@ def get_media_variant(
             "texture_max_size": glb_texture_max_size,
             "mesh_compression": glb_mesh_compression,
             "output": glb_output,
+            # Propagate the caller's refresh down to the 3D-API so ?refresh=true
+            # busts BOTH caches. Without this, refresh only clears the local
+            # storage cache and the 3D-API happily returns its own stale entry
+            # (the cause of the post-fix "still 14.97 MB" for preset=mobile).
+            "refresh": refresh,
         }
         try:
             with httpx.Client(timeout=300.0) as client:
