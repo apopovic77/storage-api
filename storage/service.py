@@ -1203,19 +1203,29 @@ async def _process_tts_request_from_storage(storage_obj, tts_request):
             print(f"--- Image Gen Hook: Requesting title image prompt for TTS request {tts_request.id}")
             try:
                 from main import generate_image_endpoint, ImageGenRequest
-                import google.generativeai as genai
 
-                genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                model = genai.GenerativeModel('gemini-2.5-flash')
-
+                # Generate the title-image prompt via api-ai's CLI-backed text
+                # endpoint — NOT the google-generativeai SDK. Per project policy
+                # Gemini may only run via CLI subprocess, never the billable
+                # Google API/SDK. Reuses the same /ai/chatgpt path as the safety
+                # pipeline (subscription-backed, no per-call billing).
+                _ai_api_base = os.getenv("AI_API_BASE_URL", "http://127.0.0.1:8000")
+                _ai_api_key = os.getenv("AI_INTERNAL_API_KEY", "Inetpass1")
                 image_prompt_request = (
                     "Based on the following dialog, create a short, visually descriptive prompt for a text-to-image AI. "
                     "The prompt should capture the essence and mood of the conversation in a single scene. "
                     "Describe the scene, characters, and atmosphere. Return only the prompt text."
                     f"\n\nDIALOG:\n{tts_request.content.text}"
                 )
-                image_prompt_response = await model.generate_content_async(image_prompt_request)
-                image_prompt = image_prompt_response.text.strip()
+                async with httpx.AsyncClient(timeout=60.0) as _prompt_client:
+                    _prompt_resp = await _prompt_client.post(
+                        f"{_ai_api_base}/ai/chatgpt",
+                        json={"prompt": image_prompt_request},
+                        headers={"X-API-KEY": _ai_api_key, "Content-Type": "application/json"},
+                    )
+                    _prompt_resp.raise_for_status()
+                    _prompt_body = _prompt_resp.json()
+                image_prompt = (_prompt_body.get("response") or _prompt_body.get("message") or "").strip()
                 
                 print(f"--- Image Gen Hook: Received prompt: '{image_prompt}'")
                 
