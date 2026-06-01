@@ -2951,6 +2951,35 @@ def _check_quarantine(obj, current_user: Optional[User]) -> None:
             )
 
 
+# In-memory cache of the 3D-API pipeline version (git SHA prefix), refreshed
+# from {THREED_API_URL}/health at most once per _THREED_VERSION_TTL seconds and
+# mixed into the GLB derivative cache token. A 3D-API redeploy bumps the version
+# → storage's cached GLBs auto-invalidate (we never serve output from an old
+# pipeline). Failure-safe: on any probe error we keep the last known value (or
+# "unknown"), never blocking GLB serving.
+_THREED_VERSION_CACHE = {"value": None, "fetched_at": 0.0}
+_THREED_VERSION_TTL = 300  # seconds
+
+
+def _get_threed_pipeline_version(threed_api_url: str) -> str:
+    import time
+    now = time.time()
+    cached = _THREED_VERSION_CACHE
+    if cached["value"] is not None and (now - cached["fetched_at"]) < _THREED_VERSION_TTL:
+        return cached["value"]
+    version = cached["value"] or "unknown"
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            resp = client.get(f"{threed_api_url}/health")
+            if resp.status_code == 200:
+                version = (resp.json().get("pipeline_version") or version)[:8]
+    except Exception:
+        pass  # keep prior/unknown — the version probe must never block serving
+    cached["value"] = version
+    cached["fetched_at"] = now
+    return version
+
+
 @router.get("/media/{object_id}")
 def get_media_variant(
     object_id: int,
@@ -3122,9 +3151,13 @@ def get_media_variant(
         if glb_output not in {"glb", "zip"}:
             raise HTTPException(status_code=400, detail="output must be glb or zip")
 
-        # Local cache: keyed by checksum + params → auto-invalidated when file is updated
+        # Local cache: keyed by checksum + 3D-API pipeline version + params →
+        # auto-invalidated when the file is updated OR the 3D-API pipeline is
+        # redeployed (so we never serve a GLB produced by an old pipeline).
+        threed_api_url = os.getenv("THREED_API_URL", "http://127.0.0.1:8065")
+        threed_pipeline_version = _get_threed_pipeline_version(threed_api_url)
         suffix_ext = "zip" if glb_output == "zip" else "glb"
-        cache_token_src = f"{obj.checksum or 'nochk'}|{glb_decimate}|{glb_texture_format}|{glb_texture_quality}|{glb_texture_max_size}|{glb_mesh_compression}|{glb_output}"
+        cache_token_src = f"{obj.checksum or 'nochk'}|{threed_pipeline_version}|{glb_decimate}|{glb_texture_format}|{glb_texture_quality}|{glb_texture_max_size}|{glb_mesh_compression}|{glb_output}"
         cache_token = hashlib.md5(cache_token_src.encode()).hexdigest()[:12]
         base_name = Path(obj.object_key).stem if obj.object_key else f"obj_{object_id}"
         glb_cache_name = f"glb_{base_name}_{cache_token}.{suffix_ext}"
@@ -3138,8 +3171,8 @@ def get_media_variant(
         if glb_cache_path.exists():
             return FileResponse(glb_cache_path, media_type=media_type_glb, headers=_media_extra_headers)
 
-        # Forward to 3D-API via multipart upload (portable across storage instances)
-        threed_api_url = os.getenv("THREED_API_URL", "http://127.0.0.1:8065")
+        # Forward to 3D-API via multipart upload (portable across storage instances).
+        # threed_api_url resolved above for the pipeline-version cache key.
         try:
             with open(src_path, "rb") as glb_f:
                 glb_bytes = glb_f.read()
