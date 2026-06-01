@@ -67,7 +67,14 @@ app.add_middleware(
 )
 
 _MEDIA_ID_RE = re.compile(r"^/storage/media/(\d+)/?$")
-_EXPOSE_HEADERS = "Content-Length, Content-Range, X-HLS-URL, X-Transcoding-Status, X-Mime-Type"
+_EXPOSE_HEADERS = "Content-Length, Content-Range, X-HLS-URL, X-Transcoding-Status, X-Mime-Type, X-Transcoded-Size"
+
+# Query params that change the served representation. For HEAD requests carrying
+# any of these, the raw source file_size_bytes/mime is NOT the truth — reporting
+# it is the "HEAD lies" bug (issue #61). GLB transforms get the real cached size
+# via X-Transcoded-Size; image transforms get X-Transcoding-Status=dynamic.
+_GLB_HEAD_PARAMS = ("decimate", "texture_format", "texture_quality", "texture_max_size", "mesh_compression", "output", "preset")
+_IMG_HEAD_PARAMS = ("variant", "width", "height", "format", "quality", "aspect_ratio", "trim", "display_for")
 
 
 def _apply_cors_for_head(headers: dict, request: Request) -> dict:
@@ -126,6 +133,53 @@ async def storage_media_head_headers(request: Request, call_next):
                 if obj.ai_safety_status:
                     quarantine_headers["X-Transcoding-Status"] = obj.ai_safety_status
                 return Response(status_code=451, headers=quarantine_headers)
+
+            # Issue #61: for representation-changing requests, the raw source
+            # size/mime is not what GET returns. Report the real transcoded size
+            # for cached GLB variants (X-Transcoded-Size); never report the
+            # misleading raw Content-Length for an uncached/parametrized variant.
+            qp = request.query_params
+            has_glb = any(k in qp for k in _GLB_HEAD_PARAMS)
+            has_img = any(k in qp for k in _IMG_HEAD_PARAMS)
+            if has_glb or has_img:
+                vheaders = {"Content-Disposition": "inline"}
+                status = "dynamic"
+                transcoded_size = None
+                out_mime = None
+                if has_glb:
+                    try:
+                        _f = lambda x: float(x) if x not in (None, "") else None
+                        _i = lambda x: int(x) if x not in (None, "") else None
+                        resolved = storage_routes._resolve_glb_params(
+                            _f(qp.get("decimate")), qp.get("texture_format"),
+                            _i(qp.get("texture_quality")), _i(qp.get("texture_max_size")),
+                            qp.get("mesh_compression"), qp.get("output"), qp.get("preset"),
+                        )
+                        pv = storage_routes._get_threed_pipeline_version(
+                            os.getenv("THREED_API_URL", "http://127.0.0.1:8065")
+                        )
+                        cache_path = storage_routes._glb_cache_path_for(obj, resolved, pv)
+                        out_mime = "application/zip" if resolved["output"] == "zip" else "model/gltf-binary"
+                        if cache_path.exists():
+                            transcoded_size = cache_path.stat().st_size
+                            status = "hit"
+                        else:
+                            status = "miss"
+                    except Exception:
+                        status = "dynamic"
+                vheaders["X-Transcoding-Status"] = status
+                if out_mime:
+                    vheaders["X-Mime-Type"] = out_mime
+                if transcoded_size is not None:
+                    vheaders["X-Transcoded-Size"] = str(transcoded_size)
+                    vheaders["Content-Length"] = str(transcoded_size)
+                    vheaders["Accept-Ranges"] = "bytes"
+                _apply_cors_for_head(vheaders, request)
+                return Response(
+                    status_code=200,
+                    media_type=(out_mime or obj.mime_type or "application/octet-stream"),
+                    headers=vheaders,
+                )
 
             headers = {"Content-Disposition": "inline", "Accept-Ranges": "bytes"}
             if obj.mime_type:

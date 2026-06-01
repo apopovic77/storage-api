@@ -2980,6 +2980,46 @@ def _get_threed_pipeline_version(threed_api_url: str) -> str:
     return version
 
 
+# GLB preset → concrete-param defaults. Kept here as the single source of truth
+# shared by the GET handler and the HEAD middleware (main.py) so HEAD's
+# X-Transcoded-Size is computed from the exact same cache key GET serves from.
+_GLB_PRESET_DEFAULTS = {
+    "web":     {"decimate": 0.0,  "texture_format": "webp", "texture_quality": 85, "texture_max_size": 2048, "mesh_compression": "meshopt", "output": "glb"},
+    "mobile":  {"decimate": 0.5,  "texture_format": "webp", "texture_quality": 75, "texture_max_size": 1024, "mesh_compression": "meshopt", "output": "glb"},
+    "preview": {"decimate": 0.85, "texture_format": "webp", "texture_quality": 60, "texture_max_size": 512,  "mesh_compression": "meshopt", "output": "glb"},
+}
+
+
+def _resolve_glb_params(decimate, texture_format, texture_quality, texture_max_size,
+                        mesh_compression, output, preset) -> Dict[str, Any]:
+    """Resolve GLB transform params, applying preset defaults for anything not
+    explicitly supplied. Returns the concrete params that key the derivative cache."""
+    d = _GLB_PRESET_DEFAULTS.get(preset or "", {})
+    return {
+        "decimate":         decimate         if decimate         is not None else d.get("decimate", 0.0),
+        "texture_format":   (texture_format  if texture_format   is not None else d.get("texture_format", "webp")).lower(),
+        "texture_quality":  texture_quality  if texture_quality  is not None else d.get("texture_quality", 85),
+        "texture_max_size": texture_max_size if texture_max_size is not None else d.get("texture_max_size", 2048),
+        "mesh_compression": (mesh_compression if mesh_compression is not None else d.get("mesh_compression", "none")).lower(),
+        "output":           (output           if output           is not None else d.get("output", "glb")).lower(),
+    }
+
+
+def _glb_cache_path_for(obj, resolved: Dict[str, Any], pipeline_version: str) -> Path:
+    """Deterministic GLB derivative cache path for resolved params + 3D-API
+    pipeline version. Mirrors the GET handler's cache key exactly."""
+    suffix_ext = "zip" if resolved["output"] == "zip" else "glb"
+    cache_token_src = (
+        f"{obj.checksum or 'nochk'}|{pipeline_version}|{resolved['decimate']}|"
+        f"{resolved['texture_format']}|{resolved['texture_quality']}|"
+        f"{resolved['texture_max_size']}|{resolved['mesh_compression']}|{resolved['output']}"
+    )
+    cache_token = hashlib.md5(cache_token_src.encode()).hexdigest()[:12]
+    base_name = Path(obj.object_key).stem if obj.object_key else f"obj_{obj.id}"
+    glb_cache_name = f"glb_{base_name}_{cache_token}.{suffix_ext}"
+    return generic_storage.webview_dir / (obj.tenant_id or "arkturian") / glb_cache_name
+
+
 @router.get("/media/{object_id}")
 def get_media_variant(
     object_id: int,
@@ -3129,20 +3169,18 @@ def get_media_variant(
             # No transform requested → serve original
             return FileResponse(src_path, media_type="model/gltf-binary", headers=_media_extra_headers)
 
-        # Apply preset defaults
-        preset_defaults = {
-            "web":     {"decimate": 0.0, "texture_format": "webp", "texture_quality": 85, "texture_max_size": 2048, "mesh_compression": "meshopt", "output": "glb"},
-            "mobile":  {"decimate": 0.5, "texture_format": "webp", "texture_quality": 75, "texture_max_size": 1024, "mesh_compression": "meshopt", "output": "glb"},
-            "preview": {"decimate": 0.85,"texture_format": "webp", "texture_quality": 60, "texture_max_size": 512,  "mesh_compression": "meshopt", "output": "glb"},
-        }
-        defaults = preset_defaults.get(preset or "", {})
-
-        glb_decimate         = decimate         if decimate         is not None else defaults.get("decimate", 0.0)
-        glb_texture_format   = (texture_format  if texture_format   is not None else defaults.get("texture_format", "webp")).lower()
-        glb_texture_quality  = texture_quality  if texture_quality  is not None else defaults.get("texture_quality", 85)
-        glb_texture_max_size = texture_max_size if texture_max_size is not None else defaults.get("texture_max_size", 2048)
-        glb_mesh_compression = (mesh_compression if mesh_compression is not None else defaults.get("mesh_compression", "none")).lower()
-        glb_output           = (output           if output           is not None else defaults.get("output", "glb")).lower()
+        # Resolve preset → concrete params via the shared helper (also used by
+        # the HEAD middleware so HEAD's X-Transcoded-Size matches GET's output).
+        resolved = _resolve_glb_params(
+            decimate, texture_format, texture_quality,
+            texture_max_size, mesh_compression, output, preset,
+        )
+        glb_decimate         = resolved["decimate"]
+        glb_texture_format   = resolved["texture_format"]
+        glb_texture_quality  = resolved["texture_quality"]
+        glb_texture_max_size = resolved["texture_max_size"]
+        glb_mesh_compression = resolved["mesh_compression"]
+        glb_output           = resolved["output"]
 
         if glb_texture_format not in {"webp", "jpg", "jpeg", "png"}:
             raise HTTPException(status_code=400, detail="texture_format must be webp, jpg, or png")
@@ -3156,12 +3194,7 @@ def get_media_variant(
         # redeployed (so we never serve a GLB produced by an old pipeline).
         threed_api_url = os.getenv("THREED_API_URL", "http://127.0.0.1:8065")
         threed_pipeline_version = _get_threed_pipeline_version(threed_api_url)
-        suffix_ext = "zip" if glb_output == "zip" else "glb"
-        cache_token_src = f"{obj.checksum or 'nochk'}|{threed_pipeline_version}|{glb_decimate}|{glb_texture_format}|{glb_texture_quality}|{glb_texture_max_size}|{glb_mesh_compression}|{glb_output}"
-        cache_token = hashlib.md5(cache_token_src.encode()).hexdigest()[:12]
-        base_name = Path(obj.object_key).stem if obj.object_key else f"obj_{object_id}"
-        glb_cache_name = f"glb_{base_name}_{cache_token}.{suffix_ext}"
-        glb_cache_path = generic_storage.webview_dir / (obj.tenant_id or "arkturian") / glb_cache_name
+        glb_cache_path = _glb_cache_path_for(obj, resolved, threed_pipeline_version)
 
         if refresh and glb_cache_path.exists():
             glb_cache_path.unlink(missing_ok=True)
