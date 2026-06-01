@@ -3044,12 +3044,47 @@ def get_media_variant(
         stored_trim = context_meta.get("trim_bounds")
 
     # === GLB / 3D MODEL HANDLING ===
-    # Detect 3D model by MIME or filename suffix (octet-stream is common for GLB)
+    # Detect 3D model by MIME or filename suffix. Binary GLBs are frequently
+    # stored with a generic mime (application/octet-stream) and sometimes
+    # without a .glb suffix, so for those generic types additionally sniff the
+    # glTF magic bytes ("glTF" = 0x46546C67). Without this, such objects fall
+    # through to the plain FileResponse below and the raw original is served
+    # with the transform params silently ignored (the "28 MB broken blob"
+    # symptom reported from the AR frontend).
     fname_lower = (obj.original_filename or "").lower()
     is_glb_model = (
         mime in {"model/gltf-binary", "model/gltf+json"}
         or fname_lower.endswith((".glb", ".gltf"))
     )
+    if not is_glb_model and mime in {"application/octet-stream", "", "application/x-3ds"}:
+        try:
+            with open(src_path, "rb") as _glb_probe:
+                is_glb_model = _glb_probe.read(4) == b"glTF"
+        except Exception:
+            is_glb_model = False
+
+    # If GLB-specific transform params were supplied but this object is not a
+    # GLB, fail explicitly (415) instead of silently serving the untransformed
+    # original — which reaches the caller as a corrupt/oversized download.
+    glb_params_supplied = any([
+        decimate is not None,
+        texture_format is not None,
+        texture_quality is not None,
+        texture_max_size is not None,
+        mesh_compression is not None,
+        output is not None,
+        preset is not None,
+    ])
+    if glb_params_supplied and not is_glb_model:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                "3D/GLB transform parameters were supplied but object "
+                f"{object_id} is not a recognized glTF/GLB model "
+                f"(mime={mime!r}, filename={obj.original_filename!r})."
+            ),
+        )
+
     if is_glb_model:
         glb_transform_requested = any([
             decimate is not None,
