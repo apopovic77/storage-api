@@ -63,6 +63,7 @@ app.add_middleware(
         "X-HLS-URL",
         "X-Transcoding-Status",
         "X-Mime-Type",
+        "X-Transcoded-Size",
     ],
 )
 
