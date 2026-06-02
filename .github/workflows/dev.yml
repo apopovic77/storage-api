@@ -20,8 +20,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run build
-        run: echo 'No build required'
+      # NOTE: we intentionally do NOT `pip install -r requirements.txt` here —
+      # it pulls a private git dep (mac-transcoding-api) the GitHub runner can't
+      # clone, which made this CI fail on every push while testing nothing.
+      # compileall doesn't import modules, so it catches syntax/indent errors
+      # across the codebase without needing the dependencies installed.
+      - name: Syntax / compile check
+        run: python -m compileall -q main.py storage tasks ai_analysis knowledge_graph tenancy admin
