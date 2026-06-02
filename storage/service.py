@@ -184,6 +184,20 @@ class GenericStorageService:
         webview_path = None
         filename = file_path.name
         gps_data = None
+        embedded_title = None
+
+        def _extract_container_title(pdata: dict):
+            """Read an embedded title from ffprobe output (container/stream tags).
+            Tag keys are case-insensitive across containers (mp4/mov/mkv)."""
+            tags = (pdata.get('format') or {}).get('tags') or {}
+            t = tags.get('title') or tags.get('TITLE')
+            if not t:
+                for s in pdata.get('streams', []) or []:
+                    st = s.get('tags') or {}
+                    t = st.get('title') or st.get('TITLE')
+                    if t:
+                        break
+            return t.strip() if isinstance(t, str) and t.strip() else None
 
         try:
             if mime_type.startswith("image/"):
@@ -252,6 +266,10 @@ class GenericStorageService:
                     duration = float(probe_data['format'].get('duration', 0))
                     bit_rate = int(probe_data['format'].get('bit_rate', 0))
 
+                embedded_title = _extract_container_title(probe_data)
+                if embedded_title:
+                    print(f"--- Embedded video title found: {embedded_title!r}")
+
                 video_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'video'), None)
                 if video_stream:
                     width = int(video_stream.get('width', 0))
@@ -277,6 +295,7 @@ class GenericStorageService:
                 if 'format' in probe_data:
                     duration = float(probe_data['format'].get('duration', 0))
                     bit_rate = int(probe_data['format'].get('bit_rate', 0))
+                embedded_title = _extract_container_title(probe_data)
 
 
             if gps_data:
@@ -301,6 +320,7 @@ class GenericStorageService:
             "bit_rate": bit_rate,
             "latitude": latitude,
             "longitude": longitude,
+            "embedded_title": embedded_title,
         }
 
     async def save(self, *, data: bytes, original_filename: str, owner_user_id: int, context: Optional[str] = None, tenant_id: str = "arkturian", mime_type: Optional[str] = None) -> dict:

@@ -126,7 +126,9 @@ async def save_file_and_record(
         context=context,
         collection_id=collection_id,
         link_id=link_id,
-        title=title,
+        # Fall back to the title embedded in the media container (ffprobe
+        # format/stream tags) when the uploader didn't pass an explicit title.
+        title=title or saved.get("embedded_title"),
         description=description,
         width=saved.get("width"),
         height=saved.get("height"),
