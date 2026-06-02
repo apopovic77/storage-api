@@ -3057,7 +3057,7 @@ def get_media_variant(
     """
     # Import PIL.Image at function level (needed for image processing)
     from io import BytesIO
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     try:
         target_aspect_ratio_value = _parse_aspect_ratio_value(aspect_ratio)
@@ -3396,6 +3396,7 @@ def get_media_variant(
 
         buffer = BytesIO()
         with Image.open(source_path) as base_img:
+            base_img = ImageOps.exif_transpose(base_img)
             # Convert palette to RGBA BEFORE any crop/resize for maximum quality
             if base_img.mode in ('P', 'PA'):
                 base_img = base_img.convert('RGBA')
@@ -3594,6 +3595,11 @@ def get_media_variant(
             base_image = Image.open(BytesIO(raster_bytes))
         else:
             base_image = Image.open(src_path)
+
+        # Honour EXIF orientation so derivatives of rotated photos (iPhone
+        # Orientation=6/8) aren't served sideways — resizing otherwise bakes the
+        # raw pixels AND drops the tag, leaving the browser no way to correct.
+        base_image = ImageOps.exif_transpose(base_image)
 
         with base_image as img:
             w, h = img.size
